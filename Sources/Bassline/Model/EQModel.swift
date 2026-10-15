@@ -244,3 +244,85 @@ struct DeviceProfile: Codable, Identifiable, Equatable {
         preventsClipping ? -peakBoostDB() : preampDB
     }
 }
+
+/// What one device plays in Multi-Output, so speakers can split the music between them.
+enum SpeakerRole: String, Codable, CaseIterable, Identifiable {
+    case full
+    case vocals
+    case music
+    case bass
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .full: "Full Sound"
+        case .vocals: "Vocals"
+        case .music: "Music & Bass"
+        case .bass: "Bass Only"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .full: "speaker.wave.3.fill"
+        case .vocals: "music.mic"
+        case .music: "guitars.fill"
+        case .bass: "waveform.path"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .full:
+            "Everything, as mixed."
+        case .vocals:
+            "The centre of the mix, where singers and dialogue sit, with the bass taken out and a little extra clarity. Ideal for laptop speakers."
+        case .music:
+            "Turns the vocals well down and keeps the instruments, stereo width and full bass, with a gentle bass lift."
+        case .bass:
+            "Only the low end below about 130 Hz, like a subwoofer."
+        }
+    }
+
+    var mixMode: EQProcessor.MixMode {
+        switch self {
+        case .full: .stereo
+        case .vocals, .bass: .mono
+        case .music: .centerReduced
+        }
+    }
+
+    /// How much of the centred mid-band the Music & Bass role removes.
+    var centerReduction: Double { self == .music ? 0.75 : 0 }
+
+    /// The band treated as "vocals" when turning them down: roughly 250 Hz to 6 kHz.
+    func centerFilters(sampleRate: Double) -> [Biquad] {
+        guard self == .music else { return [] }
+        return [
+            Biquad(shape: .highPass, frequency: 250, gainDB: 0, q: 0.71, sampleRate: sampleRate),
+            Biquad(shape: .lowPass, frequency: 6_000, gainDB: 0, q: 0.71, sampleRate: sampleRate),
+        ]
+    }
+
+    /// Tone shaping for the role, applied before the device's own EQ.
+    func filters(sampleRate: Double) -> [Biquad] {
+        switch self {
+        case .full:
+            return []
+        case .vocals:
+            return [
+                Biquad(shape: .highPass, frequency: 170, gainDB: 0, q: 0.71, sampleRate: sampleRate),
+                Biquad(shape: .highPass, frequency: 170, gainDB: 0, q: 0.71, sampleRate: sampleRate),
+                Biquad(shape: .peaking, frequency: 2_800, gainDB: 3, q: 1.0, sampleRate: sampleRate),
+            ]
+        case .music:
+            return [Biquad(shape: .lowShelf, frequency: 100, gainDB: 3, q: 0.71, sampleRate: sampleRate)]
+        case .bass:
+            return [
+                Biquad(shape: .lowPass, frequency: 130, gainDB: 0, q: 0.71, sampleRate: sampleRate),
+                Biquad(shape: .lowPass, frequency: 130, gainDB: 0, q: 0.71, sampleRate: sampleRate),
+            ]
+        }
+    }
+}

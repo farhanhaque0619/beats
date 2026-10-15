@@ -6,6 +6,7 @@ struct BasslineApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
     @StateObject private var updater = UpdateChecker()
+    @StateObject private var battery = BatteryMonitor()
     @AppStorage(SettingsKey.showMenuBarIcon) private var showMenuBarIcon = true
 
     var body: some Scene {
@@ -13,6 +14,7 @@ struct BasslineApp: App {
             ContentView()
                 .environmentObject(model)
                 .environmentObject(updater)
+                .environmentObject(battery)
                 .frame(minWidth: 900, minHeight: 680)
                 .task { updater.checkIfDue() }
         }
@@ -24,12 +26,14 @@ struct BasslineApp: App {
             SettingsView()
                 .environmentObject(model)
                 .environmentObject(updater)
+                .environmentObject(battery)
         }
 
         MenuBarExtra(isInserted: $showMenuBarIcon) {
             MenuBarPanel()
                 .environmentObject(model)
                 .environmentObject(updater)
+                .environmentObject(battery)
                 .task { updater.checkIfDue() }
         } label: {
             Image(systemName: "slider.vertical.3")
@@ -56,6 +60,8 @@ struct EqualizerCommands: Commands {
             .keyboardShortcut("0", modifiers: .command)
             Button("Show Multi-Output") { model.selectedProfileID = AppModel.groupSelectionID }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
+            Button("Show App Sound") { model.selectedProfileID = AppModel.appsSelectionID }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
             Button("Auto-Sync Multi-Output") { model.autoSync() }
         }
     }

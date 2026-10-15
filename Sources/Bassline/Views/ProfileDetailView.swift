@@ -76,6 +76,7 @@ private struct CardTitle: View {
 
 private struct DeviceHeader: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var battery: BatteryMonitor
     let profile: DeviceProfile
 
     var body: some View {
@@ -91,6 +92,13 @@ private struct DeviceHeader: View {
                     .minimumScaleFactor(0.7)
                 HStack(spacing: 8) {
                     StatusPill(status: status)
+                    if let info = battery.battery(for: model.device(for: profile)?.name) {
+                        BatteryLabel(info: info, showCase: true)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 5)
+                            .glassSurface(cornerRadius: 100)
+                            .transition(.opacity)
+                    }
                     if model.isConnected(profile) && !model.isCurrentOutput(profile) {
                         Button {
                             model.playThrough(profile)

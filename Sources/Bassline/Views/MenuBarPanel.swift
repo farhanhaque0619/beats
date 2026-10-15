@@ -58,6 +58,7 @@ struct MenuBarPanel: View {
 
 private struct ActiveDeviceSection: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var battery: BatteryMonitor
     let profile: DeviceProfile
 
     var body: some View {
@@ -72,6 +73,10 @@ private struct ActiveDeviceSection: View {
                             .font(.system(size: 6))
                             .foregroundStyle(status.color)
                         Text(status.title).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let info = battery.battery(for: model.currentOutput?.name) {
+                        BatteryLabel(info: info, showCase: true)
+                            .font(.caption2)
                     }
                 }
                 Spacer(minLength: 0)
@@ -125,6 +130,7 @@ private struct ActiveDeviceSection: View {
 /// sound output; the circle on the right adds it to Multi-Output.
 private struct OutputPicker: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var battery: BatteryMonitor
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -159,6 +165,15 @@ private struct OutputPicker: View {
                             )
                             Text(device.name).lineLimit(1)
                             Spacer(minLength: 0)
+                            if let level = battery.battery(for: device.name)?.headline {
+                                HStack(spacing: 2) {
+                                    Image(systemName: BatteryLabel.symbol(level))
+                                        .foregroundStyle(BatteryLabel.color(level))
+                                    Text("\(level)%")
+                                }
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            }
                             if let profile, !profile.isFlat, profile.isEnabled {
                                 Text("EQ")
                                     .font(.caption2.weight(.bold))

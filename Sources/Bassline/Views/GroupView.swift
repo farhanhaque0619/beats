@@ -16,6 +16,7 @@ struct GroupView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     header
                     deviceList
+                    splitCard
                     syncCard
                     tips
                 }
@@ -109,6 +110,39 @@ struct GroupView: View {
         }
     }
 
+    // MARK: Split
+
+    private var splitCard: some View {
+        let canSmartSplit = model.isGroupActive && !model.builtInGroupMembers.isEmpty
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Split the Sound", systemImage: "rectangle.split.2x1")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Reset Roles") {
+                    withAnimation(.smooth(duration: 0.35)) { model.resetRoles() }
+                }
+                .disabled(!model.isGroupActive)
+                Button {
+                    withAnimation(.smooth(duration: 0.35)) { model.smartSplit() }
+                } label: {
+                    Label("Smart Split", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canSmartSplit)
+                .help(canSmartSplit
+                      ? "MacBook speakers take the vocals, everything else takes the music and bass"
+                      : "Add your Mac’s built-in speakers to the group to use Smart Split")
+            }
+            Text("Give each device a role. For example, your MacBook speakers can carry the vocals while a bigger speaker like the Acton III plays the music and bass. Together they sound wider and clearer than either alone.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .glassCard()
+    }
+
     // MARK: Sync
 
     private var syncCard: some View {
@@ -147,6 +181,7 @@ struct GroupView: View {
 
 private struct GroupDeviceRow: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var battery: BatteryMonitor
     let device: OutputDevice
 
     @State private var volume: Float = 0
@@ -188,9 +223,14 @@ private struct GroupDeviceRow: View {
                                 .foregroundStyle(tint)
                         }
                     }
-                    Text(eqSummary(profile))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Text(eqSummary(profile))
+                        if let info = battery.battery(for: device.name) {
+                            BatteryLabel(info: info)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 8)
@@ -250,6 +290,28 @@ private struct GroupDeviceRow: View {
                 }
                 .padding(.leading, 36)
                 .transition(.opacity.combined(with: .move(edge: .top)))
+
+                if model.isGroupActive {
+                    let role = model.role(for: device)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Picker("Plays", selection: Binding(
+                            get: { model.role(for: device) },
+                            set: { newRole in withAnimation(.smooth(duration: 0.3)) { model.setRole(newRole, for: device) } }
+                        )) {
+                            ForEach(SpeakerRole.allCases) { role in
+                                Label(role.title, systemImage: role.symbolName).tag(role)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        Text(role.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .contentTransition(.opacity)
+                    }
+                    .padding(.leading, 36)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
         }
         .padding(16)

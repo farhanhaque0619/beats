@@ -13,10 +13,13 @@ A Mac equalizer that gives each of your headphones and speakers its own sound. E
   - *AirPods Pro 2*: a smaller lift, because Adaptive EQ already adds some low end.
   - *Marshall Acton III*: the lift sits in the upper bass (64–250 Hz), because the speaker can't reproduce 32 Hz. Turn up the speaker's own **Bass** knob too.
 - **Multi-Output**: play your Mac's sound on up to four devices at once, like two pairs of AirPods, or Beats plus the Marshall. Each device keeps its own EQ and gets its own volume and sync delay. **Auto-Sync** lines up Bluetooth and wired devices using the latency each one reports. Tick devices in the menu bar, or open Multi-Output in the sidebar.
+- **Speaker roles** in Multi-Output: **Vocals**, **Music & Bass**, **Bass Only** or **Full Sound** per device. Vocals plays the centre of the mix without the bass. Music & Bass turns the centred vocal band down and keeps the instruments and low end. **Smart Split** gives your MacBook speakers the vocals and every other speaker the music and bass.
+- **App Sound**: a volume for each app, and a switch to let an app skip the EQ (handy for FaceTime or Zoom calls). Works with browsers and other apps that play from helper processes.
+- **Battery levels** for AirPods, Beats and other Bluetooth headphones (left, right and case where available), in the sidebar, device page, Multi-Output and the menu bar.
 - **10-band EQ** (32 Hz to 16 kHz) with a live frequency-response curve. Drag the points on the curve or use the faders. A live spectrum of your music plays behind the curve.
 - **Hold to Compare**: press and hold to hear the original sound, let go to hear the EQ.
 - **Saved presets**: save any sound as a named preset and use it on every device.
-- **Keyboard shortcuts**: ⇧⌘E turns the EQ on or off, ⌥⌘↑ and ⌥⌘↓ change Bass Boost, ⇧⌘M opens Multi-Output.
+- **Keyboard shortcuts**: ⇧⌘E turns the EQ on or off, ⌥⌘↑ and ⌥⌘↓ change Bass Boost, ⇧⌘M opens Multi-Output, ⇧⌘A opens App Sound.
 - **Bass Boost**: one slider that adds a smooth low shelf under 110 Hz on top of the bands.
 - **Prevent distortion**: lowers the output by exactly as much as you boost, and a soft limiter catches peaks, so heavy bass stays clean.
 - **Menu bar control**: switch the EQ on or off, change presets, set Bass Boost, and pick the Mac's sound output without opening the window.

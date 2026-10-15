@@ -13,7 +13,13 @@ struct ContentView: View {
             ZStack {
                 AmbientBackground(tint: backgroundTint)
 
-                if model.selectedProfileID == AppModel.groupSelectionID {
+                if model.selectedProfileID == AppModel.appsSelectionID {
+                    AppsView()
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
+                            removal: .opacity
+                        ))
+                } else if model.selectedProfileID == AppModel.groupSelectionID {
                     GroupView()
                         .transition(.asymmetric(
                             insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
@@ -52,6 +58,7 @@ struct ContentView: View {
 extension ContentView {
     private var backgroundTint: Color {
         if model.selectedProfileID == AppModel.groupSelectionID { return .multiOutput }
+        if model.selectedProfileID == AppModel.appsSelectionID { return .appSound }
         return model.profile(id: model.selectedProfileID)?.tint ?? DeviceKind.other.tint
     }
 }
@@ -63,6 +70,7 @@ private struct Sidebar: View {
         List(selection: $model.selectedProfileID) {
             Section {
                 MultiOutputRow().tag(AppModel.groupSelectionID)
+                AppSoundRow().tag(AppModel.appsSelectionID)
             }
             Section("My Devices") {
                 ForEach(model.knownProfiles) { profile in
@@ -119,8 +127,28 @@ private struct MultiOutputRow: View {
     }
 }
 
+private struct AppSoundRow: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let customised = model.appRules.values.filter { !$0.isDefault }.count
+        HStack(spacing: 10) {
+            DeviceBadge(symbol: "square.stack.3d.up.fill", tint: .appSound, size: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("App Sound")
+                Text(customised == 0 ? "Volume and EQ per app" : "\(customised) app\(customised == 1 ? "" : "s") customised")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 3)
+    }
+}
+
 private struct DeviceRow: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var battery: BatteryMonitor
     let profile: DeviceProfile
 
     var body: some View {
@@ -136,6 +164,16 @@ private struct DeviceRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            if let info = battery.battery(for: model.device(for: profile)?.name), let level = info.headline {
+                HStack(spacing: 2) {
+                    Image(systemName: BatteryLabel.symbol(level))
+                        .foregroundStyle(BatteryLabel.color(level))
+                    Text("\(level)%")
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .help(batteryHelp(info))
+            }
             if status == .equalizing {
                 Image(systemName: "waveform")
                     .foregroundStyle(profile.tint)
@@ -164,6 +202,15 @@ private struct DeviceRow: View {
                 Button("Forget This Device", role: .destructive) { model.forget(profile.id) }
             }
         }
+    }
+
+    private func batteryHelp(_ info: BatteryInfo) -> String {
+        var parts: [String] = []
+        if let left = info.left { parts.append("Left \(left)%") }
+        if let right = info.right { parts.append("Right \(right)%") }
+        if let caseLevel = info.caseLevel { parts.append("Case \(caseLevel)%") }
+        if let main = info.main, parts.isEmpty { parts.append("Battery \(main)%") }
+        return parts.joined(separator: ", ")
     }
 
     private func rowSubtitle(_ status: DeviceStatus) -> String {

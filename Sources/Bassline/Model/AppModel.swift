@@ -22,12 +22,16 @@ enum SettingsKey {
     static let extraOutputs = "extraOutputUIDs"
     static let outputDelays = "outputDelaysMs"
     static let userPresets = "userPresets.v1"
+    static let appRules = "appRules.v1"
+    static let outputRoles = "outputRoles"
 }
 
 @MainActor
 final class AppModel: ObservableObject {
     /// Sidebar selection for the Multi-Output page.
     static let groupSelectionID = "multi-output"
+    /// Sidebar selection for the App Sound page.
+    static let appsSelectionID = "app-sound"
     static let maxGroupSize = EQProcessor.maxRoutes
 
     @Published private(set) var profiles: [DeviceProfile] = []
@@ -43,6 +47,12 @@ final class AppModel: ObservableObject {
     /// While true (Hold to Compare), every device plays the original sound.
     @Published private(set) var isBypassed = false
     @Published private(set) var userPresets: [EQPreset] = []
+    /// What each device plays in Multi-Output, by device UID.
+    @Published private(set) var outputRoles: [String: SpeakerRole] = [:]
+    /// Apps that use audio right now (or recently), playing apps first.
+    @Published private(set) var audioApps: [AudioApp] = []
+    /// Per-app volume and EQ choices, by app key.
+    @Published private(set) var appRules: [String: AppRule] = [:]
 
     let engine = SystemEQEngine()
     private let storageKey = "profiles.v1"
@@ -63,6 +73,14 @@ final class AppModel: ObservableObject {
         profiles = Self.loadProfiles(key: storageKey)
         extraOutputUIDs = defaults.stringArray(forKey: SettingsKey.extraOutputs) ?? []
         outputDelays = (defaults.dictionary(forKey: SettingsKey.outputDelays) as? [String: Double]) ?? [:]
+        if let data = defaults.data(forKey: SettingsKey.appRules),
+           let rules = try? JSONDecoder().decode([String: AppRule].self, from: data) {
+            appRules = rules
+        }
+        if let roles = defaults.dictionary(forKey: SettingsKey.outputRoles) as? [String: String] {
+            outputRoles = roles.compactMapValues(SpeakerRole.init(rawValue:))
+        }
+        audioApps = AudioAppScanner.scan()
         if let data = defaults.data(forKey: SettingsKey.userPresets),
            let presets = try? JSONDecoder().decode([EQPreset].self, from: data) {
             userPresets = presets
@@ -71,6 +89,9 @@ final class AppModel: ObservableObject {
 
         HAL.observeSystem(kAudioHardwarePropertyDefaultOutputDevice) { [weak self] in
             Task { @MainActor in self?.outputDidChange() }
+        }
+        HAL.observeSystem(kAudioHardwarePropertyProcessObjectList) { [weak self] in
+            Task { @MainActor in self?.refreshApps() }
         }
         HAL.observeSystem(kAudioHardwarePropertyDevices) { [weak self] in
             Task { @MainActor in self?.devicesDidChange() }
@@ -228,7 +249,8 @@ final class AppModel: ObservableObject {
     /// Removes settings for devices that aren't connected (the three tuned devices stay).
     func forgetDisconnectedDevices() {
         profiles.removeAll { $0.kind == .other && !isConnected($0) && !isCurrentOutput($0) }
-        if selectedProfileID != Self.groupSelectionID, profile(id: selectedProfileID) == nil {
+        if selectedProfileID != Self.groupSelectionID, selectedProfileID != Self.appsSelectionID,
+           profile(id: selectedProfileID) == nil {
             selectedProfileID = activeProfile?.id ?? profiles.first?.id
         }
         scheduleSave()
@@ -333,6 +355,96 @@ final class AppModel: ObservableObject {
         pushSettings()
     }
 
+    // MARK: - Speaker roles
+
+    func role(for device: OutputDevice) -> SpeakerRole {
+        outputRoles[device.uid] ?? .full
+    }
+
+    func setRole(_ role: SpeakerRole, for device: OutputDevice) {
+        outputRoles[device.uid] = role == .full ? nil : role
+        saveRoles()
+        pushSettings()
+    }
+
+    /// The built-in (laptop) speakers in the group, which suit the Vocals role.
+    var builtInGroupMembers: [OutputDevice] {
+        activeGroup.filter { $0.transportType == kAudioDeviceTransportTypeBuiltIn }
+    }
+
+    /// Laptop speakers take the vocals; every other device takes the music and bass.
+    func smartSplit() {
+        let builtIn = Set(builtInGroupMembers.map(\.uid))
+        guard !builtIn.isEmpty, isGroupActive else { return }
+        for device in activeGroup {
+            outputRoles[device.uid] = builtIn.contains(device.uid) ? .vocals : .music
+        }
+        saveRoles()
+        pushSettings()
+    }
+
+    func resetRoles() {
+        for device in activeGroup { outputRoles[device.uid] = nil }
+        saveRoles()
+        pushSettings()
+    }
+
+    // MARK: - Per-app sound
+
+    func rule(for app: AudioApp) -> AppRule {
+        appRules[app.id] ?? AppRule(name: app.name)
+    }
+
+    func setVolume(_ volume: Double, for app: AudioApp) {
+        var rule = rule(for: app)
+        rule.volume = min(max(volume, 0), 1)
+        storeRule(rule, for: app)
+    }
+
+    func setUsesEQ(_ useEQ: Bool, for app: AudioApp) {
+        var rule = rule(for: app)
+        rule.useEQ = useEQ
+        storeRule(rule, for: app)
+    }
+
+    func resetRule(for key: String) {
+        appRules[key] = nil
+        saveRules()
+        applyEngineState()
+    }
+
+    /// Rules for apps that aren't running right now, so they can still be reset.
+    var savedRulesForClosedApps: [(key: String, rule: AppRule)] {
+        appRules.filter { key, rule in !rule.isDefault && !audioApps.contains { $0.id == key } }
+            .map { (key: $0.key, rule: $0.value) }
+            .sorted { $0.rule.name < $1.rule.name }
+    }
+
+    func refreshApps() {
+        let apps = AudioAppScanner.scan()
+        guard apps != audioApps else { return }
+        audioApps = apps
+        // A customised app may have started or stopped a process.
+        if engine.runningAppTaps != activeAppTaps { applyEngineState() }
+    }
+
+    private func storeRule(_ rule: AppRule, for app: AudioApp) {
+        appRules[app.id] = rule.isDefault ? nil : rule
+        saveRules()
+        applyEngineState()
+    }
+
+    /// Apps that need their own tap: customised and currently known to Core Audio.
+    private var activeAppTaps: [SystemEQEngine.AppTap] {
+        let taps = appRules.compactMap { key, rule -> SystemEQEngine.AppTap? in
+            guard !rule.isDefault,
+                  let app = audioApps.first(where: { $0.id == key }),
+                  !app.processObjects.isEmpty else { return nil }
+            return SystemEQEngine.AppTap(key: key, processes: app.processObjects.sorted())
+        }
+        return Array(taps.sorted { $0.key < $1.key }.prefix(EQProcessor.maxSources - 1))
+    }
+
     // MARK: - Devices
 
     private func profileID(for device: OutputDevice) -> String {
@@ -376,7 +488,8 @@ final class AppModel: ObservableObject {
             return
         }
         let group = activeGroup
-        let needsEngine = group.count > 1 || (activeProfile.map(shouldProcess) ?? false)
+        let appTaps = activeAppTaps
+        let needsEngine = group.count > 1 || (activeProfile.map(shouldProcess) ?? false) || !appTaps.isEmpty
         pendingStop?.cancel()
         pendingStop = nil
         guard needsEngine, let primary = group.first else {
@@ -398,7 +511,7 @@ final class AppModel: ObservableObject {
         }
         let statusName = group.count > 1 ? "\(group.count) devices" : (activeProfile?.displayName ?? primary.name)
 
-        if !forceRestart, engine.isRunning, engine.runningDeviceUIDs == group.map(\.uid) {
+        if !forceRestart, engine.isRunning, engine.runningDeviceUIDs == group.map(\.uid), engine.runningAppTaps == appTaps {
             pushSettings()
             engineStatus = .running(deviceName: statusName)
             return
@@ -406,7 +519,7 @@ final class AppModel: ObservableObject {
 
         do {
             pushSettings()
-            try engine.start(on: group)
+            try engine.start(on: group, appTaps: appTaps)
             pushSettings() // routes and the real sample rate are known now
             engineStatus = .running(deviceName: statusName)
         } catch {
@@ -437,19 +550,27 @@ final class AppModel: ObservableObject {
                 let device = connectedDevices.first { $0.uid == route.deviceUID }
                 let eq = settings(for: device.flatMap(profile(for:)))
                 let delayMs = grouped ? (outputDelays[route.deviceUID] ?? 0) : 0
+                let role = grouped ? (outputRoles[route.deviceUID] ?? .full) : .full
                 routes.append(EQProcessor.Route(
                     firstBuffer: route.firstBuffer,
                     bufferCount: route.bufferCount,
-                    filters: eq.filters,
+                    filters: role.filters(sampleRate: rate) + eq.filters,
                     gain: eq.gain,
-                    delayFrames: Int(delayMs / 1000 * rate)
+                    delayFrames: Int(delayMs / 1000 * rate),
+                    mixMode: role.mixMode,
+                    centerReduction: role.centerReduction,
+                    centerFilters: role.centerFilters(sampleRate: rate)
                 ))
             }
         } else {
             let eq = settings(for: activeProfile)
             routes = [EQProcessor.Route(firstBuffer: 0, bufferCount: 64, filters: eq.filters, gain: eq.gain, delayFrames: 0)]
         }
-        engine.processor.update(routes: routes, limiter: limiterEnabled, sampleRate: rate)
+        let sources = engine.sourceKeys.map { key -> EQProcessor.Source in
+            guard let key, let rule = appRules[key] else { return EQProcessor.Source(gain: 1, useEQ: true) }
+            return EQProcessor.Source(gain: rule.volume, useEQ: rule.useEQ)
+        }
+        engine.processor.update(routes: routes, sources: sources, limiter: limiterEnabled, sampleRate: rate)
     }
 
     // MARK: - Persistence
@@ -465,6 +586,16 @@ final class AppModel: ObservableObject {
         }
         saveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    private func saveRoles() {
+        UserDefaults.standard.set(outputRoles.mapValues(\.rawValue), forKey: SettingsKey.outputRoles)
+    }
+
+    private func saveRules() {
+        if let data = try? JSONEncoder().encode(appRules) {
+            UserDefaults.standard.set(data, forKey: SettingsKey.appRules)
+        }
     }
 
     private func saveGroup() {

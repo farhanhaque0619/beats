@@ -6,14 +6,15 @@ struct Biquad: Equatable {
 
     static let identity = Biquad(b0: 1, b1: 0, b2: 0, a1: 0, a2: 0)
 
-    enum Shape { case peaking, lowShelf, highShelf }
+    enum Shape { case peaking, lowShelf, highShelf, lowPass, highPass }
 
     init(b0: Double, b1: Double, b2: Double, a1: Double, a2: Double) {
         self.b0 = b0; self.b1 = b1; self.b2 = b2; self.a1 = a1; self.a2 = a2
     }
 
     init(shape: Shape, frequency: Double, gainDB: Double, q: Double, sampleRate: Double) {
-        guard abs(gainDB) > 0.001, frequency < sampleRate * 0.49 else {
+        let usesGain = shape == .peaking || shape == .lowShelf || shape == .highShelf
+        guard !usesGain || abs(gainDB) > 0.001, frequency < sampleRate * 0.49 else {
             self.init(b0: 1, b1: 0, b2: 0, a1: 0, a2: 0)
             return
         }
@@ -40,6 +41,20 @@ struct Biquad: Equatable {
             a0 = (a + 1) + (a - 1) * cosW + s
             a1 = -2 * ((a - 1) + (a + 1) * cosW)
             a2 = (a + 1) + (a - 1) * cosW - s
+        case .lowPass:
+            b0 = (1 - cosW) / 2
+            b1 = 1 - cosW
+            b2 = (1 - cosW) / 2
+            a0 = 1 + alpha
+            a1 = -2 * cosW
+            a2 = 1 - alpha
+        case .highPass:
+            b0 = (1 + cosW) / 2
+            b1 = -(1 + cosW)
+            b2 = (1 + cosW) / 2
+            a0 = 1 + alpha
+            a1 = -2 * cosW
+            a2 = 1 - alpha
         case .highShelf:
             let s = 2 * sqrt(a) * alpha
             b0 = a * ((a + 1) + (a - 1) * cosW + s)

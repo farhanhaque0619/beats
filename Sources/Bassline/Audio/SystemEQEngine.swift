@@ -13,6 +13,12 @@ import os
 final class SystemEQEngine {
     static let aggregateUIDPrefix = "com.bassline.eq."
 
+    /// One app that gets its own tap, so it can have its own volume or skip the EQ.
+    struct AppTap: Equatable {
+        let key: String
+        let processes: [AudioObjectID]
+    }
+
     /// The output buffers that belong to one device inside the aggregate.
     struct Route: Equatable {
         let deviceUID: String
@@ -23,12 +29,16 @@ final class SystemEQEngine {
     let processor = EQProcessor()
     private let logger = Logger(subsystem: "com.bassline.app", category: "engine")
 
-    private var tapID = AudioObjectID(kAudioObjectUnknown)
+    private var tapIDs: [AudioObjectID] = []
+    private var tapUUIDs: [UUID] = []
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
 
     private(set) var runningDeviceUIDs: [String] = []
     private(set) var routes: [Route] = []
+    private(set) var runningAppTaps: [AppTap] = []
+    /// What each input source is, in order: nil for "everything else", or an app key.
+    private(set) var sourceKeys: [String?] = []
     private(set) var sampleRate: Double = 48_000
     private(set) var bufferFrames = 512
 
@@ -43,7 +53,7 @@ final class SystemEQEngine {
     }
 
     /// Starts playing through `devices`. The first one is the clock everything follows.
-    func start(on devices: [OutputDevice]) throws {
+    func start(on devices: [OutputDevice], appTaps: [AppTap] = []) throws {
         stop()
         guard #available(macOS 14.2, *) else {
             throw CoreAudioError("System-wide EQ needs macOS Sonoma 14.2 or later.")
@@ -51,11 +61,12 @@ final class SystemEQEngine {
         guard let main = devices.first else { return }
         do {
             matchSampleRates(devices)
-            try createTap()
+            try createTaps(appTaps)
             try createAggregate(outputs: devices)
             routes = Self.makeRoutes(devices, aggregateID: aggregateID)
             try startIO(outputs: devices)
             runningDeviceUIDs = devices.map(\.uid)
+            runningAppTaps = appTaps
             logger.info("Playing on \(devices.count) device(s), clock \(main.name, privacy: .public), \(self.sampleRate) Hz")
         } catch {
             stop()
@@ -74,10 +85,13 @@ final class SystemEQEngine {
         procID = nil
         aggregateID = AudioObjectID(kAudioObjectUnknown)
 
-        if tapID != kAudioObjectUnknown, #available(macOS 14.2, *) {
-            AudioHardwareDestroyProcessTap(tapID)
+        if #available(macOS 14.2, *) {
+            for tapID in tapIDs { AudioHardwareDestroyProcessTap(tapID) }
         }
-        tapID = AudioObjectID(kAudioObjectUnknown)
+        tapIDs = []
+        tapUUIDs = []
+        sourceKeys = []
+        runningAppTaps = []
         runningDeviceUIDs = []
         routes = []
         processor.reset()
@@ -85,15 +99,23 @@ final class SystemEQEngine {
 
     // MARK: - Setup
 
-    private var tapUUID = UUID()
+    /// One muted tap for everything except our own output and the per-app taps, then one
+    /// muted tap per app. Their streams reach the IO proc in this same order.
+    @available(macOS 14.2, *)
+    private func createTaps(_ appTaps: [AppTap]) throws {
+        // Leave our own output out, otherwise we would hear ourselves in a loop.
+        let own = HAL.ownProcessObjectID().map { [$0] } ?? []
+        let appProcesses = appTaps.flatMap(\.processes)
+        try addTap(CATapDescription(stereoGlobalTapButExcludeProcesses: own + appProcesses), key: nil)
+        for app in appTaps where !app.processes.isEmpty {
+            try addTap(CATapDescription(stereoMixdownOfProcesses: app.processes), key: app.key)
+        }
+    }
 
     @available(macOS 14.2, *)
-    private func createTap() throws {
-        // Leave our own output out of the tap, otherwise we would hear ourselves in a loop.
-        let excluded = HAL.ownProcessObjectID().map { [$0] } ?? []
-        let description = CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
-        tapUUID = UUID()
-        description.uuid = tapUUID
+    private func addTap(_ description: CATapDescription, key: String?) throws {
+        let uuid = UUID()
+        description.uuid = uuid
         description.name = "Bassline EQ"
         description.muteBehavior = .muted
         description.isPrivate = true
@@ -101,7 +123,9 @@ final class SystemEQEngine {
         var newTapID = AudioObjectID(kAudioObjectUnknown)
         let err = AudioHardwareCreateProcessTap(description, &newTapID)
         guard err == noErr else { throw CoreAudioError("Couldn’t start listening to system audio", err) }
-        tapID = newTapID
+        tapIDs.append(newTapID)
+        tapUUIDs.append(uuid)
+        sourceKeys.append(key)
     }
 
     /// Extra devices run at the main device's rate when they can, which avoids resampling.
@@ -128,12 +152,12 @@ final class SystemEQEngine {
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
             kAudioAggregateDeviceSubDeviceListKey: subDevices,
-            kAudioAggregateDeviceTapListKey: [
+            kAudioAggregateDeviceTapListKey: tapUUIDs.map { uuid in
                 [
                     kAudioSubTapDriftCompensationKey: true,
-                    kAudioSubTapUIDKey: tapUUID.uuidString,
-                ]
-            ],
+                    kAudioSubTapUIDKey: uuid.uuidString,
+                ] as [String: Any]
+            },
         ]
         var newAggregateID = AudioObjectID(kAudioObjectUnknown)
         let err = AudioHardwareCreateAggregateDevice(description as CFDictionary, &newAggregateID)

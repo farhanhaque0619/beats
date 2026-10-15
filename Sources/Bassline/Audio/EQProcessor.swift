@@ -3,38 +3,64 @@ import Darwin
 import Foundation
 import os
 
-/// Realtime-safe EQ for one or more output devices.
+/// Realtime-safe mixer and EQ for one or more output devices.
 ///
-/// Every output device in the aggregate is a *route*: a run of output buffers with its own
-/// filter chain, output gain and sync delay. Settings are written from the main thread into
-/// a "pending" slot guarded by an unfair lock. The audio thread only ever *tries* the lock,
-/// so it never blocks; if the lock is busy it keeps rendering with the previous settings and
-/// picks the new ones up next cycle.
+/// Input arrives as one or more *sources* (process taps): everything else on the Mac, plus
+/// one tap per app with its own volume or EQ setting. Sources are mixed into two stereo
+/// buses: one that gets equalised and one that plays unchanged. Every output device in the
+/// aggregate is a *route* with its own speaker role, filter chain, gain and sync delay.
+///
+/// Settings are written from the main thread into a "pending" slot guarded by an unfair lock.
+/// The audio thread only ever *tries* the lock, so it never blocks; if the lock is busy it
+/// keeps rendering with the previous settings and picks the new ones up next cycle.
 final class EQProcessor {
+    enum MixMode: Int {
+        /// Left and right as they are.
+        case stereo = 0
+        /// Both channels play the centre (L+R)/2: where vocals and bass sit.
+        case mono = 1
+        /// The centred mid-band (mostly vocals) is turned down; instruments and bass stay.
+        case centerReduced = 2
+    }
+
     struct Route {
         var firstBuffer: Int
         var bufferCount: Int
         var filters: [Biquad]
         var gain: Double
         var delayFrames: Int
+        var mixMode: MixMode = .stereo
+        var centerReduction: Double = 0
+        var centerFilters: [Biquad] = []
+    }
+
+    struct Source {
+        var gain: Double
+        var useEQ: Bool
     }
 
     static let maxFilters = 16
     static let maxRoutes = 4
+    static let maxSources = 10
     static let maxChannelsPerRoute = 8
     /// Sync delay is applied to the first two (stereo) channels of each route.
     static let delayedChannels = 2
     static let maxDelayFrames = 48_000
+    static let maxFrames = 8_192
     static let scopeSize = 4_096
-
+    private static let centerFilterSlots = 2
     private static let coefficientsPerFilter = 5
-    // Global header: [routeCount, limiter, sampleRate]
-    private static let globalLength = 3
-    // Route: [firstBuffer, bufferCount, filterCount, gain, delayFrames, coefficients...]
-    private static let routeHeader = 5
-    private static var routeLength: Int { routeHeader + maxFilters * coefficientsPerFilter }
+
+    // Global: [routeCount, limiter, sampleRate, sourceCount, sourceGains…, sourceUsesEQ…]
+    private static var globalLength: Int { 4 + 2 * maxSources }
+    // Route: [firstBuffer, bufferCount, filterCount, gain, delayFrames, mixMode,
+    //         centerReduction, centerFilterCount, centre coefficients…, coefficients…]
+    private static let routeHeader = 8
+    private static var coefficientOffset: Int { routeHeader + centerFilterSlots * coefficientsPerFilter }
+    private static var routeLength: Int { coefficientOffset + maxFilters * coefficientsPerFilter }
     private static var settingsLength: Int { globalLength + maxRoutes * routeLength }
     private static var stateLength: Int { maxRoutes * maxChannelsPerRoute * maxFilters * 2 }
+    private static var centerStateLength: Int { maxRoutes * centerFilterSlots * 2 }
     private static var delayLength: Int { maxRoutes * delayedChannels * maxDelayFrames }
 
     private let lock: UnsafeMutablePointer<os_unfair_lock>
@@ -42,11 +68,15 @@ final class EQProcessor {
     private let pending: UnsafeMutablePointer<Double>
     private let active: UnsafeMutablePointer<Double>
     private let state: UnsafeMutablePointer<Double>
+    private let centerState: UnsafeMutablePointer<Double>
     private let delayLines: UnsafeMutablePointer<Float>
     private let delayPositions: UnsafeMutablePointer<Int>
-    private let inputPointers: UnsafeMutablePointer<UnsafeMutablePointer<Float>?>
-    private let inputStrides: UnsafeMutablePointer<Int>
-    private static let maxInputChannels = 16
+    // Per-cycle mix buses: EQ left/right, unchanged left/right, and the centre band.
+    private let eqLeft: UnsafeMutablePointer<Float>
+    private let eqRight: UnsafeMutablePointer<Float>
+    private let dryLeft: UnsafeMutablePointer<Float>
+    private let dryRight: UnsafeMutablePointer<Float>
+    private let center: UnsafeMutablePointer<Float>
 
     // Written by the audio thread, read by the UI. Single aligned scalars, so a torn read
     // is impossible and a slightly stale one is harmless.
@@ -57,32 +87,30 @@ final class EQProcessor {
     private let ticksToSeconds: Double
 
     init() {
+        func buffer<T>(_ count: Int, _ value: T) -> UnsafeMutablePointer<T> {
+            let pointer = UnsafeMutablePointer<T>.allocate(capacity: count)
+            pointer.initialize(repeating: value, count: count)
+            return pointer
+        }
         lock = .allocate(capacity: 1)
         lock.initialize(to: os_unfair_lock())
-        pending = .allocate(capacity: Self.settingsLength + 1)
-        pending.initialize(repeating: 0, count: Self.settingsLength + 1)
-        active = .allocate(capacity: Self.settingsLength)
-        active.initialize(repeating: 0, count: Self.settingsLength)
-        state = .allocate(capacity: Self.stateLength)
-        state.initialize(repeating: 0, count: Self.stateLength)
-        delayLines = .allocate(capacity: Self.delayLength)
-        delayLines.initialize(repeating: 0, count: Self.delayLength)
-        delayPositions = .allocate(capacity: Self.maxRoutes * Self.delayedChannels)
-        delayPositions.initialize(repeating: 0, count: Self.maxRoutes * Self.delayedChannels)
-        inputPointers = .allocate(capacity: Self.maxInputChannels)
-        inputPointers.initialize(repeating: nil, count: Self.maxInputChannels)
-        inputStrides = .allocate(capacity: Self.maxInputChannels)
-        inputStrides.initialize(repeating: 1, count: Self.maxInputChannels)
-        meters = .allocate(capacity: Self.maxRoutes * 2)
-        meters.initialize(repeating: 0, count: Self.maxRoutes * 2)
-        load = .allocate(capacity: 1)
-        load.initialize(to: 0)
-        scope = .allocate(capacity: Self.scopeSize)
-        scope.initialize(repeating: 0, count: Self.scopeSize)
-        scopePosition = .allocate(capacity: 1)
-        scopePosition.initialize(to: 0)
+        pending = buffer(Self.settingsLength + 1, 0.0)
+        active = buffer(Self.settingsLength, 0.0)
+        state = buffer(Self.stateLength, 0.0)
+        centerState = buffer(Self.centerStateLength, 0.0)
+        delayLines = buffer(Self.delayLength, Float(0))
+        delayPositions = buffer(Self.maxRoutes * Self.delayedChannels, 0)
+        eqLeft = buffer(Self.maxFrames, Float(0))
+        eqRight = buffer(Self.maxFrames, Float(0))
+        dryLeft = buffer(Self.maxFrames, Float(0))
+        dryRight = buffer(Self.maxFrames, Float(0))
+        center = buffer(Self.maxFrames, Float(0))
+        meters = buffer(Self.maxRoutes * 2, Float(0))
+        load = buffer(1, 0.0)
+        scope = buffer(Self.scopeSize, Float(0))
+        scopePosition = buffer(1, 0)
 
-        // Until the first update: one pass-through route over every buffer, limiter on.
+        // Until the first update: one source, one pass-through route over every buffer.
         active[0] = 1
         active[1] = 1
         active[2] = 48_000
@@ -96,52 +124,62 @@ final class EQProcessor {
 
     deinit {
         lock.deallocate()
-        pending.deallocate()
-        active.deallocate()
-        state.deallocate()
-        delayLines.deallocate()
+        for pointer in [pending, active, state, centerState, load] { pointer.deallocate() }
+        for pointer in [delayLines, eqLeft, eqRight, dryLeft, dryRight, center, meters, scope] { pointer.deallocate() }
         delayPositions.deallocate()
-        inputPointers.deallocate()
-        inputStrides.deallocate()
-        meters.deallocate()
-        load.deallocate()
-        scope.deallocate()
         scopePosition.deallocate()
     }
 
     // MARK: - Main thread
 
-    func update(routes: [Route], limiter: Bool, sampleRate: Double) {
+    func update(routes: [Route], sources: [Source], limiter: Bool, sampleRate: Double) {
         let routes = routes.prefix(Self.maxRoutes)
+        let sources = sources.prefix(Self.maxSources)
         os_unfair_lock_lock(lock)
         let settings = pending + 1
         settings[0] = Double(routes.count)
         settings[1] = limiter ? 1 : 0
         settings[2] = sampleRate
+        settings[3] = Double(sources.count)
+        for (i, source) in sources.enumerated() {
+            settings[4 + i] = source.gain
+            settings[4 + Self.maxSources + i] = source.useEQ ? 1 : 0
+        }
         for (r, route) in routes.enumerated() {
             let base = settings + Self.globalLength + r * Self.routeLength
             let filters = route.filters.prefix(Self.maxFilters)
+            let centerFilters = route.centerFilters.prefix(Self.centerFilterSlots)
             base[0] = Double(route.firstBuffer)
             base[1] = Double(route.bufferCount)
             base[2] = Double(filters.count)
             base[3] = route.gain
             base[4] = Double(min(max(route.delayFrames, 0), Self.maxDelayFrames - 1))
+            base[5] = Double(route.mixMode.rawValue)
+            base[6] = route.centerReduction
+            base[7] = Double(centerFilters.count)
+            for (i, f) in centerFilters.enumerated() {
+                Self.store(f, at: base + Self.routeHeader + i * Self.coefficientsPerFilter)
+            }
             for (i, f) in filters.enumerated() {
-                let co = base + Self.routeHeader + i * Self.coefficientsPerFilter
-                co[0] = f.b0
-                co[1] = f.b1
-                co[2] = f.b2
-                co[3] = f.a1
-                co[4] = f.a2
+                Self.store(f, at: base + Self.coefficientOffset + i * Self.coefficientsPerFilter)
             }
         }
         pending[0] = 1
         os_unfair_lock_unlock(lock)
     }
 
+    private static func store(_ f: Biquad, at co: UnsafeMutablePointer<Double>) {
+        co[0] = f.b0
+        co[1] = f.b1
+        co[2] = f.b2
+        co[3] = f.a1
+        co[4] = f.a2
+    }
+
     /// While the device is stopped: forget filter history, delay lines and meters.
     func reset() {
         state.update(repeating: 0, count: Self.stateLength)
+        centerState.update(repeating: 0, count: Self.centerStateLength)
         delayLines.update(repeating: 0, count: Self.delayLength)
         delayPositions.update(repeating: 0, count: Self.maxRoutes * Self.delayedChannels)
         meters.update(repeating: 0, count: Self.maxRoutes * 2)
@@ -185,9 +223,10 @@ final class EQProcessor {
             os_unfair_lock_unlock(lock)
         }
 
-        let routeCount = Int(active[0])
+        let routeCount = min(Int(active[0]), Self.maxRoutes)
         let limiter = active[1] != 0
         let sampleRate = active[2]
+        let configuredSources = Int(active[3])
 
         let inList = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
         let outList = UnsafeMutableAudioBufferListPointer(output)
@@ -201,34 +240,71 @@ final class EQProcessor {
             framesThisCycle = max(framesThisCycle, Int(outList[i].mDataByteSize) / (MemoryLayout<Float>.size * channels))
         }
 
-        // Collect input channels (tap audio) without allocating.
-        var inChannels = 0
-        var inFrames = Int.max
-        let start = firstInputBuffer < inList.count ? firstInputBuffer : 0
-        for i in start..<inList.count {
-            let buffer = inList[i]
+        // Each tap is one stereo stream after the devices' own (disabled) inputs.
+        let firstSource = firstInputBuffer < inList.count ? firstInputBuffer : 0
+        let sourceCount = min(max(configuredSources, 1), inList.count - firstSource, Self.maxSources)
+        guard sourceCount > 0 else { return }
+        var frames = Self.maxFrames
+        for s in 0..<sourceCount {
+            let buffer = inList[firstSource + s]
+            guard buffer.mData != nil, buffer.mNumberChannels > 0 else { continue }
+            frames = min(frames, Int(buffer.mDataByteSize) / (MemoryLayout<Float>.size * Int(buffer.mNumberChannels)))
+        }
+
+        // Mix the sources into the EQ bus and the unchanged bus.
+        let busBytes = frames * MemoryLayout<Float>.size
+        memset(eqLeft, 0, busBytes)
+        memset(eqRight, 0, busBytes)
+        memset(dryLeft, 0, busBytes)
+        memset(dryRight, 0, busBytes)
+        for s in 0..<sourceCount {
+            let buffer = inList[firstSource + s]
             guard let data = buffer.mData, buffer.mNumberChannels > 0 else { continue }
             let channels = Int(buffer.mNumberChannels)
             let samples = data.assumingMemoryBound(to: Float.self)
-            inFrames = min(inFrames, Int(buffer.mDataByteSize) / (MemoryLayout<Float>.size * channels))
-            for c in 0..<channels where inChannels < Self.maxInputChannels {
-                inputPointers[inChannels] = samples + c
-                inputStrides[inChannels] = channels
-                inChannels += 1
+            let gain = Float(configuredSources > 0 ? active[4 + s] : 1)
+            let useEQ = configuredSources > 0 ? active[4 + Self.maxSources + s] != 0 : true
+            guard gain > 0 else { continue }
+            let left = useEQ ? eqLeft : dryLeft
+            let right = useEQ ? eqRight : dryRight
+            let rightOffset = channels > 1 ? 1 : 0
+            for f in 0..<frames {
+                left[f] += samples[f * channels] * gain
+                right[f] += samples[f * channels + rightOffset] * gain
             }
         }
-        guard inChannels > 0 else { return }
 
         let mask = Self.scopeSize - 1
-        for r in 0..<min(routeCount, Self.maxRoutes) {
+        for r in 0..<routeCount {
             let route = active + Self.globalLength + r * Self.routeLength
             let firstBuffer = Int(route[0])
             let endBuffer = min(outList.count, firstBuffer + Int(route[1]))
             let filterCount = Int(route[2])
             let gain = route[3]
             let delay = Int(route[4])
-            let coefficients = route + Self.routeHeader
+            let mixMode = Int(route[5])
+            let reduction = Float(route[6])
+            let centerCount = Int(route[7])
+            let coefficients = route + Self.coefficientOffset
             guard firstBuffer < endBuffer else { continue }
+
+            if mixMode == MixMode.centerReduced.rawValue {
+                // Band-limit the centre once per cycle; both channels subtract it.
+                let cz = centerState + r * Self.centerFilterSlots * 2
+                let centerCo = route + Self.routeHeader
+                for f in 0..<frames {
+                    var m = 0.5 * Double(eqLeft[f] + eqRight[f])
+                    for k in 0..<centerCount {
+                        let co = centerCo + k * Self.coefficientsPerFilter
+                        let y = co[0] * m + cz[2 * k]
+                        cz[2 * k] = co[1] * m - co[3] * y + cz[2 * k + 1]
+                        cz[2 * k + 1] = co[2] * m - co[4] * y
+                        m = y
+                    }
+                    center[f] = Float(m)
+                }
+                for k in 0..<(centerCount * 2) where abs(cz[k]) < 1e-20 { cz[k] = 0 }
+            }
 
             var peaks: (Float, Float) = (0, 0)
             var routeChannel = 0
@@ -237,24 +313,30 @@ final class EQProcessor {
                 guard let data = buffer.mData, buffer.mNumberChannels > 0 else { continue }
                 let channels = Int(buffer.mNumberChannels)
                 let out = data.assumingMemoryBound(to: Float.self)
-                let frames = min(Int(buffer.mDataByteSize) / (MemoryLayout<Float>.size * channels), inFrames)
+                let bufferFrames = min(Int(buffer.mDataByteSize) / (MemoryLayout<Float>.size * channels), frames)
 
                 for c in 0..<channels {
                     let channel = routeChannel + c
-                    guard frames > 0, let src = inputPointers[channel % inChannels] else { continue }
-                    let srcStride = inputStrides[channel % inChannels]
+                    let isLeft = channel % 2 == 0
+                    let eqBus = isLeft ? eqLeft : eqRight
+                    let dryBus = isLeft ? dryLeft : dryRight
                     let useEQ = channel < Self.maxChannelsPerRoute
                     let z = state + (r * Self.maxChannelsPerRoute + (useEQ ? channel : 0)) * Self.maxFilters * 2
                     let delayed = delay > 0 && channel < Self.delayedChannels
-                    let line = delayLines + (r * Self.delayedChannels + min(channel, Self.delayedChannels - 1)) * Self.maxDelayFrames
-                    let positionSlot = delayPositions + r * Self.delayedChannels + min(channel, Self.delayedChannels - 1)
-                    var position = positionSlot.pointee
+                    let slot = r * Self.delayedChannels + min(channel, Self.delayedChannels - 1)
+                    let line = delayLines + slot * Self.maxDelayFrames
+                    var position = delayPositions[slot]
                     let writesScope = r == 0 && channel == 0
                     let scopeStart = scopePosition.pointee
                     var peak: Float = 0
 
-                    for f in 0..<frames {
-                        var x = Double(src[f * srcStride])
+                    for f in 0..<bufferFrames {
+                        var x: Double
+                        switch mixMode {
+                        case MixMode.mono.rawValue: x = 0.5 * Double(eqLeft[f] + eqRight[f])
+                        case MixMode.centerReduced.rawValue: x = Double(eqBus[f] - reduction * center[f])
+                        default: x = Double(eqBus[f])
+                        }
                         if useEQ {
                             for k in 0..<filterCount {
                                 let co = coefficients + k * Self.coefficientsPerFilter
@@ -264,7 +346,7 @@ final class EQProcessor {
                                 x = y
                             }
                         }
-                        x *= gain
+                        x = x * gain + Double(dryBus[f])
                         if delayed {
                             line[position] = Float(x)
                             var readIndex = position - delay
@@ -279,15 +361,13 @@ final class EQProcessor {
                         if writesScope { scope[(scopeStart + f) & mask] = sample }
                     }
 
-                    if delayed { positionSlot.pointee = position }
-                    if writesScope { scopePosition.pointee = (scopeStart + frames) & mask }
+                    if delayed { delayPositions[slot] = position }
+                    if writesScope { scopePosition.pointee = (scopeStart + bufferFrames) & mask }
                     if channel == 0 { peaks.0 = peak } else if channel == 1 { peaks.1 = peak }
 
                     // Flush denormals so silence stays cheap.
                     if useEQ {
-                        for k in 0..<(filterCount * 2) where abs(z[k]) < 1e-20 {
-                            z[k] = 0
-                        }
+                        for k in 0..<(filterCount * 2) where abs(z[k]) < 1e-20 { z[k] = 0 }
                     }
                 }
                 routeChannel += channels

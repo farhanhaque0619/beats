@@ -99,13 +99,13 @@ struct GroupView: View {
     /// The sound output first, then the other group members, then everything else.
     private var sortedDevices: [OutputDevice] {
         let current = model.currentOutput?.uid
+        let extras = Set(model.extraOutputUIDs)
+        let rank: (OutputDevice) -> Int = { device in
+            if device.uid == current { return 0 }
+            return extras.contains(device.uid) ? 1 : 2
+        }
         return model.connectedDevices.sorted { a, b in
-            func rank(_ d: OutputDevice) -> Int {
-                if d.uid == current { return 0 }
-                if model.extraOutputUIDs.contains(d.uid) { return 1 }
-                return 2
-            }
-            return (rank(a), a.name) < (rank(b), b.name)
+            (rank(a), a.name) < (rank(b), b.name)
         }
     }
 

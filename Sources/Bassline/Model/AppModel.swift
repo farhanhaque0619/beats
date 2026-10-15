@@ -10,6 +10,16 @@ enum EngineStatus: Equatable {
     case unsupported
 }
 
+enum SettingsKey {
+    static let limiter = "limiterEnabled"
+    static let showInDock = "showInDock"
+    static let showMenuBarIcon = "showMenuBarIcon"
+    static let openWindowAtLaunch = "openWindowAtLaunch"
+    static let autoCheckUpdates = "autoCheckUpdates"
+    static let lastUpdateCheck = "lastUpdateCheck"
+    static let dismissedPermissionNote = "hasDismissedPermissionNote"
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var profiles: [DeviceProfile] = []
@@ -18,11 +28,19 @@ final class AppModel: ObservableObject {
     @Published private(set) var connectedDevices: [OutputDevice] = []
     @Published private(set) var engineStatus: EngineStatus = .idle
 
-    private let engine = SystemEQEngine()
+    let engine = SystemEQEngine()
     private let storageKey = "profiles.v1"
     private var saveWork: DispatchWorkItem?
 
     init() {
+        UserDefaults.standard.register(defaults: [
+            SettingsKey.limiter: true,
+            SettingsKey.showInDock: true,
+            SettingsKey.showMenuBarIcon: true,
+            SettingsKey.openWindowAtLaunch: true,
+            SettingsKey.autoCheckUpdates: true,
+        ])
+
         profiles = Self.loadProfiles(key: storageKey)
         selectedProfileID = profiles.first?.id
 
@@ -52,7 +70,18 @@ final class AppModel: ObservableObject {
     }
 
     var knownProfiles: [DeviceProfile] { profiles.filter { $0.kind != .other } }
-    var otherProfiles: [DeviceProfile] { profiles.filter { $0.kind == .other } }
+
+    /// Other outputs that are plugged in or paired right now.
+    var connectedOtherProfiles: [DeviceProfile] {
+        profiles.filter { $0.kind == .other && (isConnected($0) || isCurrentOutput($0)) }
+    }
+
+    /// Other outputs that aren't connected but have custom settings worth keeping.
+    var savedOtherProfiles: [DeviceProfile] {
+        profiles.filter { $0.kind == .other && !isConnected($0) && !isCurrentOutput($0) && !$0.isFlat }
+    }
+
+    var limiterEnabled: Bool { UserDefaults.standard.bool(forKey: SettingsKey.limiter) }
 
     func profile(id: String?) -> DeviceProfile? {
         profiles.first { $0.id == id }
@@ -63,23 +92,31 @@ final class AppModel: ObservableObject {
     }
 
     func isConnected(_ profile: DeviceProfile) -> Bool {
-        connectedDevices.contains { profileID(for: $0) == profile.id }
+        device(for: profile) != nil
+    }
+
+    func device(for profile: DeviceProfile) -> OutputDevice? {
+        connectedDevices.first { profileID(for: $0) == profile.id }
     }
 
     func isProcessing(_ profile: DeviceProfile) -> Bool {
         isCurrentOutput(profile) && engine.isRunning
     }
 
+    func profile(for device: OutputDevice) -> DeviceProfile? {
+        profile(id: profileID(for: device))
+    }
+
     // MARK: - Editing
 
     func update(_ id: String, _ change: (inout DeviceProfile) -> Void) {
         guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
-        let wasEnabled = profiles[index].isEnabled
+        let wasRunning = shouldProcess(profiles[index])
         change(&profiles[index])
         scheduleSave()
 
         guard profiles[index].id == activeProfile?.id else { return }
-        if wasEnabled != profiles[index].isEnabled {
+        if wasRunning != shouldProcess(profiles[index]) {
             applyEngineState()
         } else {
             pushSettings()
@@ -88,9 +125,13 @@ final class AppModel: ObservableObject {
 
     func setGain(_ gain: Double, band: Int, for id: String) {
         update(id) { profile in
-            profile.gains[band] = (gain * 2).rounded() / 2
+            profile.gains[band] = (gain * 10).rounded() / 10
             profile.presetName = "Custom"
         }
+    }
+
+    func apply(_ preset: EQPreset, to id: String) {
+        update(id) { $0.apply(preset) }
     }
 
     func reset(_ id: String) {
@@ -106,8 +147,41 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func resetAllDevices() {
+        for id in profiles.map(\.id) { reset(id) }
+    }
+
+    /// Removes settings for devices that aren't connected (the three tuned devices stay).
+    func forgetDisconnectedDevices() {
+        profiles.removeAll { $0.kind == .other && !isConnected($0) && !isCurrentOutput($0) }
+        if profile(id: selectedProfileID) == nil { selectedProfileID = activeProfile?.id ?? profiles.first?.id }
+        scheduleSave()
+    }
+
+    func forget(_ id: String) {
+        guard let profile = profile(id: id), profile.kind == .other, !isConnected(profile) else { return }
+        profiles.removeAll { $0.id == id }
+        if selectedProfileID == id { selectedProfileID = activeProfile?.id ?? profiles.first?.id }
+        scheduleSave()
+    }
+
+    /// Switches the Mac's sound output to this device.
+    func playThrough(_ profile: DeviceProfile) {
+        guard let device = device(for: profile) else { return }
+        HAL.setDefaultOutputDevice(device.id)
+    }
+
+    func playThrough(_ device: OutputDevice) {
+        HAL.setDefaultOutputDevice(device.id)
+    }
+
     func retry() {
         applyEngineState()
+    }
+
+    /// Re-sends settings to the audio thread after a global setting changes.
+    func settingsDidChange() {
+        pushSettings()
     }
 
     // MARK: - Devices
@@ -119,6 +193,12 @@ final class AppModel: ObservableObject {
 
     private func refreshDevices() {
         connectedDevices = HAL.outputDevices()
+        var added = false
+        for device in connectedDevices where profile(for: device) == nil {
+            profiles.append(.other(uid: device.uid, name: device.name, transportType: device.transportType))
+            added = true
+        }
+        if added { scheduleSave() }
     }
 
     private func outputDidChange() {
@@ -126,26 +206,25 @@ final class AppModel: ObservableObject {
         guard device != currentOutput || !engineMatches(device) else { return }
         currentOutput = device
         refreshDevices()
-
-        if let device, profile(id: profileID(for: device)) == nil {
-            profiles.append(.other(uid: device.uid, name: device.name))
-            scheduleSave()
-        }
         applyEngineState()
     }
 
     private func engineMatches(_ device: OutputDevice?) -> Bool {
-        engine.runningDeviceUID == device?.uid && (activeProfile?.isEnabled ?? false)
+        engine.runningDeviceUID == device?.uid && (activeProfile.map(shouldProcess) ?? false)
     }
 
     // MARK: - Engine
+
+    private func shouldProcess(_ profile: DeviceProfile) -> Bool {
+        profile.isEnabled && !profile.isFlat
+    }
 
     private func applyEngineState(isRetry: Bool = false) {
         guard SystemEQEngine.isSupported else {
             engineStatus = .unsupported
             return
         }
-        guard let device = currentOutput, let profile = activeProfile, profile.isEnabled else {
+        guard let device = currentOutput, let profile = activeProfile, shouldProcess(profile) else {
             engine.stop()
             engineStatus = .idle
             return
@@ -172,7 +251,12 @@ final class AppModel: ObservableObject {
     private func pushSettings() {
         guard let profile = activeProfile else { return }
         let gain = pow(10, profile.effectivePreampDB / 20)
-        engine.processor.update(filters: profile.filters(sampleRate: engine.sampleRate), outputGain: gain)
+        engine.processor.update(
+            filters: profile.filters(sampleRate: engine.sampleRate),
+            outputGain: gain,
+            limiter: limiterEnabled,
+            sampleRate: engine.sampleRate
+        )
     }
 
     // MARK: - Persistence
@@ -199,6 +283,15 @@ final class AppModel: ObservableObject {
         let known = [DeviceKind.beatsStudioPro, .airPodsPro2, .marshallActon3].map { kind in
             stored.first { $0.id == kind.rawValue } ?? .standard(for: kind)
         }
-        return known + stored.filter { $0.kind == .other }
+        // Version 1.0 saved other devices switched off and without an icon.
+        let others = stored.filter { $0.kind == .other }.map { profile -> DeviceProfile in
+            var profile = profile
+            if profile.iconName == nil {
+                profile.iconName = DeviceKind.symbol(forName: profile.displayName, transportType: 0)
+                if profile.isFlat { profile.isEnabled = true }
+            }
+            return profile
+        }
+        return known + others
     }
 }

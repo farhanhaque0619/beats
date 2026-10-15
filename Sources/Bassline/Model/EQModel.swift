@@ -1,3 +1,4 @@
+import CoreAudio
 import Foundation
 
 /// The ten bands of a classic octave graphic EQ.
@@ -92,7 +93,39 @@ enum DeviceKind: String, Codable, CaseIterable {
         case .marshallActon3:
             "Acton III also has a Bass knob on top. Turn it up first, then fine-tune here. Placing it near a wall adds more low end."
         case .other:
-            "Changes apply to everything your Mac plays while this device is the sound output."
+            "Changes apply to everything your Mac plays through this device. While the EQ is flat, Bassline doesn’t process audio at all."
+        }
+    }
+
+    /// A fitting SF Symbol for an output we have no tuned profile for.
+    static func symbol(forName name: String, transportType: UInt32) -> String {
+        let n = name.lowercased()
+        if n.contains("airpods max") { return "airpods.max" }
+        if n.contains("airpods pro") { return "airpods.pro" }
+        if n.contains("airpods") { return "airpods" }
+        if n.contains("beats") { return "beats.headphones" }
+        if n.contains("homepod") { return "homepod.fill" }
+        if n.contains("headphone") || n.contains("headset") || n.contains("buds") || n.contains("wh-") { return "headphones" }
+        if n.contains("macbook") { return "laptopcomputer" }
+        if n.contains("imac") { return "desktopcomputer" }
+        if n.contains("mac mini") { return "macmini.fill" }
+        if n.contains("mac studio") { return "macstudio.fill" }
+        if n.contains("tv") { return "tv" }
+        switch transportType {
+        case kAudioDeviceTransportTypeHDMI, kAudioDeviceTransportTypeDisplayPort, kAudioDeviceTransportTypeThunderbolt:
+            return "display"
+        case kAudioDeviceTransportTypeAirPlay:
+            return "airplayaudio"
+        case kAudioDeviceTransportTypeUSB:
+            return "cable.connector"
+        case kAudioDeviceTransportTypeBuiltIn:
+            return "laptopcomputer"
+        case kAudioDeviceTransportTypeVirtual:
+            return "waveform"
+        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
+            return "hifispeaker.fill"
+        default:
+            return "speaker.wave.2.fill"
         }
     }
 
@@ -115,6 +148,15 @@ struct DeviceProfile: Codable, Identifiable, Equatable {
     var preampDB: Double
     var preventsClipping: Bool
     var presetName: String
+    /// SF Symbol picked when the device was first seen. Optional so older saves still load.
+    var iconName: String?
+
+    var symbolName: String { iconName ?? kind.symbolName }
+
+    /// True when the settings wouldn't change the sound, so no processing is needed.
+    var isFlat: Bool {
+        gains.allSatisfy { abs($0) < 0.05 } && abs(bassBoost) < 0.05 && (preventsClipping || abs(preampDB) < 0.05)
+    }
 
     static func standard(for kind: DeviceKind) -> DeviceProfile {
         let preset = kind.signature ?? .flat
@@ -131,17 +173,20 @@ struct DeviceProfile: Codable, Identifiable, Equatable {
         )
     }
 
-    static func other(uid: String, name: String) -> DeviceProfile {
+    /// Any other output. It starts flat, which costs nothing: processing only runs once
+    /// something is actually changed.
+    static func other(uid: String, name: String, transportType: UInt32 = 0) -> DeviceProfile {
         DeviceProfile(
             id: "device:" + uid,
             kind: .other,
             displayName: name,
-            isEnabled: false,
+            isEnabled: true,
             gains: EQBands.flat,
             bassBoost: 0,
             preampDB: 0,
             preventsClipping: true,
-            presetName: EQPreset.flat.name
+            presetName: EQPreset.flat.name,
+            iconName: DeviceKind.symbol(forName: name, transportType: transportType)
         )
     }
 
@@ -157,6 +202,10 @@ struct DeviceProfile: Codable, Identifiable, Equatable {
     // MARK: - Filter design
 
     func filters(sampleRate: Double) -> [Biquad] {
+        Self.filters(gains: gains, bassBoost: bassBoost, sampleRate: sampleRate)
+    }
+
+    static func filters(gains: [Double], bassBoost: Double, sampleRate: Double) -> [Biquad] {
         var filters = EQBands.frequencies.enumerated().map { index, frequency in
             let shape: Biquad.Shape = switch index {
             case 0: .lowShelf
@@ -164,14 +213,15 @@ struct DeviceProfile: Codable, Identifiable, Equatable {
             default: .peaking
             }
             let q = shape == .peaking ? EQBands.q : 0.71
-            return Biquad(shape: shape, frequency: frequency, gainDB: gains[index], q: q, sampleRate: sampleRate)
+            let gain = index < gains.count ? gains[index] : 0
+            return Biquad(shape: shape, frequency: frequency, gainDB: gain, q: q, sampleRate: sampleRate)
         }
         filters.append(Biquad(shape: .lowShelf, frequency: EQBands.bassShelfFrequency, gainDB: bassBoost, q: 0.71, sampleRate: sampleRate))
         return filters
     }
 
     /// Combined EQ response in dB, before output gain.
-    func response(at frequency: Double, filters: [Biquad], sampleRate: Double) -> Double {
+    static func response(at frequency: Double, filters: [Biquad], sampleRate: Double) -> Double {
         filters.reduce(0) { $0 + $1.magnitudeDB(at: frequency, sampleRate: sampleRate) }
     }
 
@@ -180,7 +230,7 @@ struct DeviceProfile: Codable, Identifiable, Equatable {
         var peak = 0.0
         for i in 0..<160 {
             let frequency = 20 * pow(1_000, Double(i) / 159)
-            peak = max(peak, response(at: frequency, filters: filters, sampleRate: sampleRate))
+            peak = max(peak, Self.response(at: frequency, filters: filters, sampleRate: sampleRate))
         }
         return peak
     }

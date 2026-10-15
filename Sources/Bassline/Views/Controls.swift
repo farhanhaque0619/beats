@@ -1,61 +1,259 @@
 import SwiftUI
 
-/// A Music-app style vertical fader for one EQ band.
+// MARK: - Animatable EQ values
+
+/// The ten band gains plus Bass Boost, as something SwiftUI can interpolate. Animating
+/// this vector (instead of the drawn points) lets the curve morph between presets at
+/// the display's full refresh rate, 120 Hz on ProMotion screens.
+struct EQVector: VectorArithmetic {
+    var values: [Double]
+
+    init(_ values: [Double]) { self.values = values }
+
+    init(_ profile: DeviceProfile) {
+        values = profile.gains + [profile.bassBoost]
+    }
+
+    var gains: [Double] { Array(values.prefix(EQBands.frequencies.count)) }
+    var bassBoost: Double { values.count > EQBands.frequencies.count ? values[EQBands.frequencies.count] : 0 }
+
+    static var zero: EQVector { EQVector([]) }
+
+    static func + (lhs: EQVector, rhs: EQVector) -> EQVector { combine(lhs, rhs, +) }
+    static func - (lhs: EQVector, rhs: EQVector) -> EQVector { combine(lhs, rhs, -) }
+
+    mutating func scale(by rhs: Double) {
+        for i in values.indices { values[i] *= rhs }
+    }
+
+    var magnitudeSquared: Double { values.reduce(0) { $0 + $1 * $1 } }
+
+    private static func combine(_ lhs: EQVector, _ rhs: EQVector, _ op: (Double, Double) -> Double) -> EQVector {
+        let count = max(lhs.values.count, rhs.values.count)
+        var result = [Double](repeating: 0, count: count)
+        for i in 0..<count {
+            result[i] = op(i < lhs.values.count ? lhs.values[i] : 0, i < rhs.values.count ? rhs.values[i] : 0)
+        }
+        return EQVector(result)
+    }
+}
+
+// MARK: - Response curve
+
+private enum CurveGeometry {
+    static let sampleRate = 48_000.0
+    static let dbRange = 18.0
+    static let minFrequency = 20.0
+    static let maxFrequency = 20_000.0
+
+    static func x(_ frequency: Double, in rect: CGRect) -> CGFloat {
+        let t = log(frequency / minFrequency) / log(maxFrequency / minFrequency)
+        return rect.minX + CGFloat(t) * rect.width
+    }
+
+    static func y(_ db: Double, in rect: CGRect) -> CGFloat {
+        let clamped = min(max(db, -dbRange), dbRange)
+        return rect.midY - CGFloat(clamped / dbRange) * rect.height / 2
+    }
+}
+
+/// The combined EQ response as a line, a filled area, or band markers.
+struct ResponseShape: Shape {
+    enum Style { case line, area, markers }
+
+    var vector: EQVector
+    var style: Style
+
+    var animatableData: EQVector {
+        get { vector }
+        set { vector = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let filters = DeviceProfile.filters(gains: vector.gains, bassBoost: vector.bassBoost, sampleRate: CurveGeometry.sampleRate)
+        func response(_ frequency: Double) -> Double {
+            DeviceProfile.response(at: frequency, filters: filters, sampleRate: CurveGeometry.sampleRate)
+        }
+
+        var path = Path()
+        switch style {
+        case .markers:
+            let gains = vector.gains
+            for (index, frequency) in EQBands.frequencies.enumerated() where index < gains.count && abs(gains[index]) >= 0.05 {
+                let center = CGPoint(x: CurveGeometry.x(frequency, in: rect), y: CurveGeometry.y(response(frequency), in: rect))
+                path.addEllipse(in: CGRect(x: center.x - 3.5, y: center.y - 3.5, width: 7, height: 7))
+            }
+        case .line, .area:
+            let steps = max(Int(rect.width / 3), 48)
+            let zeroY = CurveGeometry.y(0, in: rect)
+            if style == .area { path.move(to: CGPoint(x: rect.minX, y: zeroY)) }
+            for i in 0...steps {
+                let frequency = CurveGeometry.minFrequency
+                    * pow(CurveGeometry.maxFrequency / CurveGeometry.minFrequency, Double(i) / Double(steps))
+                let point = CGPoint(x: CurveGeometry.x(frequency, in: rect), y: CurveGeometry.y(response(frequency), in: rect))
+                if i == 0 && style == .line { path.move(to: point) } else { path.addLine(to: point) }
+            }
+            if style == .area {
+                path.addLine(to: CGPoint(x: rect.maxX, y: zeroY))
+                path.closeSubpath()
+            }
+        }
+        return path
+    }
+}
+
+/// Grid and labels behind the curve. Drawn once per size change, never per frame.
+private struct CurveGrid: View {
+    let compact: Bool
+    let insets: EdgeInsets
+
+    var body: some View {
+        Canvas { context, size in
+            let plot = CGRect(
+                x: insets.leading, y: insets.top,
+                width: size.width - insets.leading - insets.trailing,
+                height: size.height - insets.top - insets.bottom
+            )
+            let grid = Color.primary.opacity(compact ? 0.06 : 0.08)
+            for db in stride(from: -12.0, through: 12.0, by: 6.0) {
+                let y = CurveGeometry.y(db, in: plot)
+                var line = Path()
+                line.move(to: CGPoint(x: plot.minX, y: y))
+                line.addLine(to: CGPoint(x: plot.maxX, y: y))
+                context.stroke(line, with: .color(db == 0 ? Color.primary.opacity(0.18) : grid), lineWidth: db == 0 ? 1 : 0.5)
+                if !compact {
+                    let label = Text(db > 0 ? "+\(Int(db))" : "\(Int(db))")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundColor(.secondary)
+                    context.draw(label, at: CGPoint(x: plot.minX - 8, y: y), anchor: .trailing)
+                }
+            }
+            for (index, frequency) in EQBands.frequencies.enumerated() {
+                let x = CurveGeometry.x(frequency, in: plot)
+                var line = Path()
+                line.move(to: CGPoint(x: x, y: plot.minY))
+                line.addLine(to: CGPoint(x: x, y: plot.maxY))
+                context.stroke(line, with: .color(grid), lineWidth: 0.5)
+                if !compact {
+                    let label = Text(EQBands.labels[index]).font(.caption2).foregroundColor(.secondary)
+                    context.draw(label, at: CGPoint(x: x, y: plot.maxY + 12), anchor: .center)
+                }
+            }
+        }
+    }
+}
+
+struct ResponseCurveView: View {
+    let profile: DeviceProfile
+    var compact = false
+
+    var body: some View {
+        let insets = compact
+            ? EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
+            : EdgeInsets(top: 6, leading: 34, bottom: 24, trailing: 6)
+        let tint = profile.isEnabled ? profile.tint : Color.secondary
+        let vector = EQVector(profile)
+
+        ZStack {
+            CurveGrid(compact: compact, insets: insets)
+
+            ZStack {
+                ResponseShape(vector: vector, style: .area)
+                    .fill(LinearGradient(colors: [tint.opacity(0.38), tint.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                ResponseShape(vector: vector, style: .line)
+                    .stroke(tint.opacity(0.35), style: StrokeStyle(lineWidth: compact ? 5 : 8, lineCap: .round, lineJoin: .round))
+                    .blur(radius: compact ? 3 : 6)
+                ResponseShape(vector: vector, style: .line)
+                    .stroke(tint, style: StrokeStyle(lineWidth: compact ? 1.75 : 2.5, lineCap: .round, lineJoin: .round))
+                if !compact {
+                    ResponseShape(vector: vector, style: .markers).fill(.white)
+                    ResponseShape(vector: vector, style: .markers).stroke(tint, lineWidth: 1.5)
+                }
+            }
+            .padding(insets)
+            .drawingGroup()
+        }
+        .accessibilityElement()
+        .accessibilityLabel("Frequency response")
+        .accessibilityValue(String(format: "Peak boost %.1f decibels", profile.peakBoostDB()))
+    }
+}
+
+// MARK: - Band fader
+
+/// A vertical fader for one EQ band. While dragging, the knob follows the pointer
+/// exactly (no rounding, no implicit animation) so it tracks at the display's refresh rate.
 struct VerticalGainSlider: View {
-    static let knobInset: CGFloat = 10
+    static let knobSize: CGFloat = 22
 
     @Binding var value: Double
     let range: ClosedRange<Double>
+    let tint: Color
     let label: String
 
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var isDragging = false
+    @State private var dragValue: Double?
+    @State private var isHovering = false
+
+    private var shownValue: Double { dragValue ?? value }
+    private var isDragging: Bool { dragValue != nil }
 
     var body: some View {
         GeometryReader { geo in
             let height = geo.size.height
-            let y = position(for: value, height: height)
+            let y = position(for: shownValue, height: height)
             let zeroY = position(for: 0, height: height)
 
             ZStack(alignment: .top) {
                 Capsule()
-                    .fill(.quaternary)
-                    .frame(width: 5)
-                    .padding(.vertical, Self.knobInset)
-
-                Rectangle()
-                    .fill(.tertiary)
-                    .frame(width: 16, height: 1)
-                    .offset(y: zeroY)
+                    .fill(Color.primary.opacity(0.09))
+                    .frame(width: 6)
+                    .padding(.vertical, Self.knobSize / 2)
 
                 Capsule()
-                    .fill(Color.accentColor.gradient)
-                    .frame(width: 5, height: max(abs(y - zeroY), 0))
+                    .fill(Color.primary.opacity(0.25))
+                    .frame(width: 14, height: 1.5)
+                    .offset(y: zeroY - 0.75)
+
+                Capsule()
+                    .fill(LinearGradient(colors: [tint, tint.opacity(0.75)], startPoint: .top, endPoint: .bottom))
+                    .frame(width: 6, height: max(abs(y - zeroY), 0))
+                    .shadow(color: tint.opacity(isDragging ? 0.7 : 0.4), radius: isDragging ? 7 : 4)
                     .offset(y: min(y, zeroY))
 
                 Circle()
                     .fill(.white)
-                    .overlay(Circle().strokeBorder(.black.opacity(0.12), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(isDragging ? 0.35 : 0.22), radius: isDragging ? 4 : 2, y: 1)
-                    .frame(width: 2 * Self.knobInset, height: 2 * Self.knobInset)
-                    .scaleEffect(isDragging ? 1.12 : 1)
-                    .offset(y: y - Self.knobInset)
+                    .overlay(Circle().strokeBorder(Color.black.opacity(0.10), lineWidth: 0.5))
+                    .overlay(Circle().fill(tint).frame(width: 6, height: 6).opacity(isDragging ? 1 : 0))
+                    .shadow(color: .black.opacity(isDragging ? 0.30 : 0.18), radius: isDragging ? 6 : 3, y: isDragging ? 3 : 1.5)
+                    .frame(width: Self.knobSize, height: Self.knobSize)
+                    .scaleEffect(isDragging ? 1.15 : (isHovering ? 1.06 : 1))
+                    .animation(.snappy(duration: 0.2), value: isDragging)
+                    .animation(.snappy(duration: 0.2), value: isHovering)
+                    .offset(y: y - Self.knobSize / 2)
             }
             .frame(width: geo.size.width, height: height, alignment: .top)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
-                        if !isDragging { withAnimation(.snappy(duration: 0.15)) { isDragging = true } }
-                        value = self.value(for: drag.location.y, height: height)
+                        let newValue = self.value(for: drag.location.y, height: height)
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            dragValue = newValue
+                            value = newValue
+                        }
                     }
                     .onEnded { _ in
-                        withAnimation(.snappy(duration: 0.2)) { isDragging = false }
+                        withAnimation(.snappy(duration: 0.2)) { dragValue = nil }
                     }
             )
         }
+        .onHover { isHovering = $0 }
         .contextMenu {
-            Button("Reset to 0 dB") { value = 0 }
+            Button("Reset to 0 dB") {
+                withAnimation(.smooth(duration: 0.35)) { value = 0 }
+            }
         }
         .accessibilityElement()
         .accessibilityLabel(label)
@@ -70,108 +268,52 @@ struct VerticalGainSlider: View {
     }
 
     private func position(for value: Double, height: CGFloat) -> CGFloat {
-        let track = height - 2 * Self.knobInset
+        let track = height - Self.knobSize
         let fraction = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
-        return Self.knobInset + (1 - fraction) * track
+        return Self.knobSize / 2 + (1 - fraction) * track
     }
 
     private func value(for y: CGFloat, height: CGFloat) -> Double {
-        let track = max(height - 2 * Self.knobInset, 1)
-        let fraction = 1 - (y - Self.knobInset) / track
+        let track = max(height - Self.knobSize, 1)
+        let fraction = 1 - (y - Self.knobSize / 2) / track
         let raw = range.lowerBound + Double(fraction) * (range.upperBound - range.lowerBound)
-        return min(max(raw, range.lowerBound), range.upperBound)
+        // Gentle detent at 0 dB so flattening a band is easy.
+        let snapped = abs(raw) < 0.35 ? 0 : raw
+        return min(max(snapped, range.lowerBound), range.upperBound)
     }
 }
 
-/// The combined EQ curve, drawn on a log-frequency grid.
-struct EQCurveView: View {
-    let profile: DeviceProfile
-    var compact = false
+// MARK: - Live output meter
 
-    private static let sampleRate = 48_000.0
-    private static let dbRange = 18.0
-    private static let gridFrequencies: [Double] = [32, 64, 125, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000]
-    private static let minFrequency = 20.0
-    private static let maxFrequency = 20_000.0
+/// Left/right output level, redrawn every display frame while audio is being processed.
+struct LevelMeter: View {
+    let processor: EQProcessor
+    let tint: Color
+    let isActive: Bool
+    var height: CGFloat = 36
 
     var body: some View {
-        Canvas { context, size in
-            let left: CGFloat = compact ? 0 : 34
-            let bottom: CGFloat = compact ? 0 : 18
-            let plot = CGRect(x: left, y: 4, width: size.width - left, height: size.height - bottom - 8)
-            let filters = profile.filters(sampleRate: Self.sampleRate)
-
-            func x(_ frequency: Double) -> CGFloat {
-                let t = log(frequency / Self.minFrequency) / log(Self.maxFrequency / Self.minFrequency)
-                return plot.minX + CGFloat(t) * plot.width
-            }
-            func y(_ db: Double) -> CGFloat {
-                let clamped = min(max(db, -Self.dbRange), Self.dbRange)
-                return plot.midY - CGFloat(clamped / Self.dbRange) * plot.height / 2
-            }
-
-            // Grid
-            let gridColor = Color.secondary.opacity(compact ? 0.12 : 0.18)
-            for db in stride(from: -12.0, through: 12.0, by: 6.0) {
-                var line = Path()
-                line.move(to: CGPoint(x: plot.minX, y: y(db)))
-                line.addLine(to: CGPoint(x: plot.maxX, y: y(db)))
-                context.stroke(line, with: .color(db == 0 ? Color.secondary.opacity(0.35) : gridColor), lineWidth: db == 0 ? 1 : 0.5)
-                if !compact {
-                    let text = Text(db > 0 ? "+\(Int(db))" : "\(Int(db))")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundColor(.secondary)
-                    context.draw(text, at: CGPoint(x: left - 8, y: y(db)), anchor: .trailing)
-                }
-            }
-            for (index, frequency) in Self.gridFrequencies.enumerated() {
-                var line = Path()
-                line.move(to: CGPoint(x: x(frequency), y: plot.minY))
-                line.addLine(to: CGPoint(x: x(frequency), y: plot.maxY))
-                context.stroke(line, with: .color(gridColor), lineWidth: 0.5)
-                if !compact {
-                    let text = Text(EQBands.labels[index])
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    context.draw(text, at: CGPoint(x: x(frequency), y: plot.maxY + 11), anchor: .center)
-                }
-            }
-
-            // Curve
-            let steps = compact ? 90 : 220
-            var curve = Path()
-            var fill = Path()
-            fill.move(to: CGPoint(x: plot.minX, y: y(0)))
-            for i in 0...steps {
-                let frequency = Self.minFrequency * pow(Self.maxFrequency / Self.minFrequency, Double(i) / Double(steps))
-                let point = CGPoint(x: x(frequency), y: y(profile.response(at: frequency, filters: filters, sampleRate: Self.sampleRate)))
-                if i == 0 { curve.move(to: point) } else { curve.addLine(to: point) }
-                fill.addLine(to: point)
-            }
-            fill.addLine(to: CGPoint(x: plot.maxX, y: y(0)))
-            fill.closeSubpath()
-
-            let tint = profile.isEnabled ? Color.accentColor : Color.secondary
-            context.fill(
-                fill,
-                with: .linearGradient(
-                    Gradient(colors: [tint.opacity(0.32), tint.opacity(0.04)]),
-                    startPoint: CGPoint(x: 0, y: plot.minY),
-                    endPoint: CGPoint(x: 0, y: y(0))
-                )
-            )
-            context.stroke(curve, with: .color(tint), style: StrokeStyle(lineWidth: compact ? 1.75 : 2.25, lineCap: .round, lineJoin: .round))
-
-            if !compact {
-                for (index, frequency) in EQBands.frequencies.enumerated() where profile.gains[index] != 0 {
-                    let center = CGPoint(x: x(frequency), y: y(profile.response(at: frequency, filters: filters, sampleRate: Self.sampleRate)))
-                    let dot = Path(ellipseIn: CGRect(x: center.x - 3.5, y: center.y - 3.5, width: 7, height: 7))
-                    context.fill(dot, with: .color(.white))
-                    context.stroke(dot, with: .color(tint), lineWidth: 1.5)
-                }
+        TimelineView(.animation(minimumInterval: nil, paused: !isActive)) { _ in
+            HStack(spacing: 3) {
+                bar(isActive ? processor.meterLevel(0) : 0)
+                bar(isActive ? processor.meterLevel(1) : 0)
             }
         }
-        .accessibilityLabel("Frequency response")
-        .accessibilityValue(String(format: "Peak boost %.1f decibels", profile.peakBoostDB()))
+        .frame(height: height)
+        .accessibilityHidden(true)
+    }
+
+    private func bar(_ level: Float) -> some View {
+        // Map -48…0 dBFS onto the bar height.
+        let db = 20 * log10(max(Double(level), 0.000_01))
+        let fraction = CGFloat(min(max((db + 48) / 48, 0), 1))
+        return Capsule()
+            .fill(Color.primary.opacity(0.10))
+            .frame(width: 5)
+            .overlay(alignment: .bottom) {
+                Capsule()
+                    .fill(LinearGradient(colors: [tint, tint.opacity(0.6)], startPoint: .top, endPoint: .bottom))
+                    .frame(height: max(fraction * height, fraction > 0 ? 5 : 0))
+            }
     }
 }

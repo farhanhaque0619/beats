@@ -1,22 +1,43 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         NavigationSplitView {
             Sidebar()
-                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
+                .navigationSplitViewColumnWidth(min: 230, ideal: 260, max: 320)
         } detail: {
-            if let id = model.selectedProfileID, model.profile(id: id) != nil {
-                ProfileDetailView(profileID: id)
-                    .id(id)
-            } else {
-                ContentUnavailableView(
-                    "Choose a Device",
-                    systemImage: "headphones",
-                    description: Text("Pick headphones or a speaker to shape how it sounds.")
-                )
+            ZStack {
+                AmbientBackground(tint: model.profile(id: model.selectedProfileID)?.tint ?? DeviceKind.other.tint)
+
+                if let id = model.selectedProfileID, model.profile(id: id) != nil {
+                    ProfileDetailView(profileID: id)
+                        .id(id)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
+                            removal: .opacity
+                        ))
+                } else {
+                    ContentUnavailableView(
+                        "Choose a Device",
+                        systemImage: "headphones",
+                        description: Text("Pick headphones or a speaker to shape how it sounds.")
+                    )
+                }
+            }
+            .animation(.smooth(duration: 0.35), value: model.selectedProfileID)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    openSettings()
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                .help("Settings")
             }
         }
     }
@@ -25,10 +46,6 @@ struct ContentView: View {
 private struct Sidebar: View {
     @EnvironmentObject private var model: AppModel
 
-    private var visibleOthers: [DeviceProfile] {
-        model.otherProfiles.filter { model.isConnected($0) || $0.isEnabled || model.isCurrentOutput($0) }
-    }
-
     var body: some View {
         List(selection: $model.selectedProfileID) {
             Section("My Devices") {
@@ -36,17 +53,26 @@ private struct Sidebar: View {
                     DeviceRow(profile: profile).tag(profile.id)
                 }
             }
-            if !visibleOthers.isEmpty {
-                Section("Other Outputs") {
-                    ForEach(visibleOthers) { profile in
+            if !model.connectedOtherProfiles.isEmpty {
+                Section("Connected") {
+                    ForEach(model.connectedOtherProfiles) { profile in
+                        DeviceRow(profile: profile).tag(profile.id)
+                    }
+                }
+            }
+            if !model.savedOtherProfiles.isEmpty {
+                Section("Saved") {
+                    ForEach(model.savedOtherProfiles) { profile in
                         DeviceRow(profile: profile).tag(profile.id)
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+        .animation(.smooth(duration: 0.3), value: model.connectedOtherProfiles.map(\.id))
         .safeAreaInset(edge: .bottom) {
             EngineFooter()
+                .padding(10)
         }
     }
 }
@@ -58,26 +84,46 @@ private struct DeviceRow: View {
     var body: some View {
         let status = model.status(of: profile)
         HStack(spacing: 10) {
-            Image(systemName: profile.kind.symbolName)
-                .font(.system(size: 17))
-                .frame(width: 26)
-                .foregroundStyle(status == .disconnected ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+            DeviceBadge(symbol: profile.symbolName, tint: profile.tint, size: 28, dimmed: status == .disconnected)
             VStack(alignment: .leading, spacing: 1) {
                 Text(profile.displayName)
                     .lineLimit(1)
-                Text(status.shortTitle)
+                Text(rowSubtitle(status))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
             if status == .equalizing {
                 Image(systemName: "waveform")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(profile.tint)
                     .symbolEffect(.variableColor.iterative, options: .repeating)
                     .help("Equalizing now")
+                    .transition(.scale.combined(with: .opacity))
             }
         }
         .padding(.vertical, 3)
+        .animation(.smooth(duration: 0.3), value: status)
+        .contextMenu {
+            if model.isConnected(profile) && !model.isCurrentOutput(profile) {
+                Button("Play Through This Device") { model.playThrough(profile) }
+            }
+            Button("Reset EQ") {
+                withAnimation(.smooth(duration: 0.45)) { model.reset(profile.id) }
+            }
+            if profile.kind == .other && !model.isConnected(profile) {
+                Divider()
+                Button("Forget This Device", role: .destructive) { model.forget(profile.id) }
+            }
+        }
+    }
+
+    private func rowSubtitle(_ status: DeviceStatus) -> String {
+        switch status {
+        case .equalizing: return "Equalizing · \(profile.presetName)"
+        case .playingWithoutEQ: return profile.isEnabled ? "Playing · Flat" : "Playing · EQ off"
+        default: return status.shortTitle
+        }
     }
 }
 
@@ -85,19 +131,26 @@ private struct EngineFooter: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(dotColor)
-                .frame(width: 8, height: 8)
+        HStack(spacing: 10) {
+            Image(systemName: "circle.fill")
+                .font(.system(size: 8))
+                .foregroundStyle(dotColor)
+                .symbolEffect(.pulse, options: .repeating, isActive: isRunning)
             VStack(alignment: .leading, spacing: 0) {
                 Text(title).font(.callout.weight(.medium))
                 Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.bar)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .glassSurface(cornerRadius: 14)
+        .animation(.smooth(duration: 0.3), value: model.engineStatus)
+    }
+
+    private var isRunning: Bool {
+        if case .running = model.engineStatus { return true }
+        return false
     }
 
     private var dotColor: Color {
@@ -111,14 +164,13 @@ private struct EngineFooter: View {
     private var title: String {
         switch model.engineStatus {
         case .running: "Equalizer on"
-        case .idle: "Equalizer off"
+        case .idle: "Not processing"
         case .failed: "Equalizer stopped"
         case .unsupported: "Unavailable"
         }
     }
 
     private var subtitle: String {
-        let output = model.currentOutput?.name ?? "No output"
-        return "Output: \(output)"
+        "Output: \(model.currentOutput?.name ?? "None")"
     }
 }

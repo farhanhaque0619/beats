@@ -21,6 +21,10 @@ final class SystemEQEngine {
 
     private(set) var runningDeviceUID: String?
     private(set) var sampleRate: Double = 48_000
+    private(set) var bufferFrames = 512
+
+    /// Extra delay the EQ adds: one buffer in from the tap, one buffer out.
+    var addedLatency: TimeInterval { 2 * Double(bufferFrames) / sampleRate }
 
     var isRunning: Bool { runningDeviceUID != nil }
 
@@ -109,6 +113,7 @@ final class SystemEQEngine {
         guard err == noErr else { throw CoreAudioError("Couldn’t connect to the output device", err) }
         aggregateID = newAggregateID
         sampleRate = HAL.nominalSampleRate(newAggregateID) ?? 48_000
+        bufferFrames = HAL.bufferFrameSize(newAggregateID) ?? 512
     }
 
     private func startIO(outputDeviceID: AudioObjectID) throws {

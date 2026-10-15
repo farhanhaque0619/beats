@@ -11,6 +11,8 @@ struct OutputDevice: Identifiable, Equatable, Hashable {
     var isBluetooth: Bool {
         transportType == kAudioDeviceTransportTypeBluetooth || transportType == kAudioDeviceTransportTypeBluetoothLE
     }
+
+    var isVirtual: Bool { transportType == kAudioDeviceTransportTypeVirtual }
 }
 
 struct CoreAudioError: LocalizedError {
@@ -81,6 +83,19 @@ enum HAL {
         return value
     }
 
+    static func bufferFrameSize(_ id: AudioObjectID) -> Int? {
+        uint32(id, kAudioDevicePropertyBufferFrameSize).map(Int.init)
+    }
+
+    /// Makes `id` the Mac's sound output, like choosing it in Control Center.
+    @discardableResult
+    static func setDefaultOutputDevice(_ id: AudioObjectID) -> Bool {
+        var addr = address(kAudioHardwarePropertyDefaultOutputDevice)
+        var deviceID = id
+        let size = UInt32(MemoryLayout<AudioObjectID>.size)
+        return AudioObjectSetPropertyData(systemObject, &addr, 0, nil, size, &deviceID) == noErr
+    }
+
     static func streamCount(_ id: AudioObjectID, scope: AudioObjectPropertyScope) -> Int {
         var addr = address(kAudioDevicePropertyStreams, scope)
         var size: UInt32 = 0
@@ -99,13 +114,16 @@ enum HAL {
         defaultOutputDeviceID().flatMap(outputDevice)
     }
 
-    /// Every real playback device, excluding aggregates and our own private devices.
+    /// Every real playback device. Aggregates, our own private devices, and virtual
+    /// devices (Zoom, Teams, loopback drivers) are left out unless they are the current output.
     static func outputDevices() -> [OutputDevice] {
-        allDeviceIDs().compactMap { id in
+        let current = defaultOutputDeviceID()
+        return allDeviceIDs().compactMap { id in
             guard streamCount(id, scope: kAudioObjectPropertyScopeOutput) > 0,
                   let device = outputDevice(id),
                   device.transportType != kAudioDeviceTransportTypeAggregate,
-                  !device.uid.hasPrefix(SystemEQEngine.aggregateUIDPrefix)
+                  !device.uid.hasPrefix(SystemEQEngine.aggregateUIDPrefix),
+                  !device.isVirtual || id == current
             else { return nil }
             return device
         }

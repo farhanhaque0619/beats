@@ -1,13 +1,13 @@
 # Bassline
 
-A Mac equalizer that gives each of your headphones and speakers its own sound. It recognizes **Beats Studio Pro**, **AirPods Pro 2**, and **Marshall Acton III** automatically and switches to that device's EQ when your Mac starts playing through it.
+A Mac equalizer that gives each of your headphones and speakers its own sound. Every output your Mac can play through gets its own EQ: built-in speakers, displays, USB DACs, AirPlay and any Bluetooth device. **Beats Studio Pro**, **AirPods Pro 2**, and **Marshall Acton III** also get tuned bass-forward starting points. Bassline switches to the right EQ the moment your Mac starts playing through a device.
 
 <img src="Resources/AppIcon.png" width="128" alt="Bassline icon">
 
 ## What it does
 
 - **Works on everything your Mac plays**: Spotify, Apple Music, YouTube in Safari or Chrome, games, all of it.
-- **A separate profile for each device.** Connect your Beats and the Beats EQ turns on. Switch to AirPods and the AirPods EQ takes over.
+- **A separate profile for each device.** Connect your Beats and the Beats EQ turns on. Switch to AirPods and the AirPods EQ takes over. New devices appear on their own and start flat.
 - **Bass-forward starting points** written for each product:
   - *Beats Studio Pro*: a strong sub and mid-bass lift. Studio Pro is tuned much flatter than older Beats, so this brings the punch back.
   - *AirPods Pro 2*: a smaller lift, because Adaptive EQ already adds some low end.
@@ -15,7 +15,9 @@ A Mac equalizer that gives each of your headphones and speakers its own sound. I
 - **10-band EQ** (32 Hz to 16 kHz) with a live frequency-response curve.
 - **Bass Boost**: one slider that adds a smooth low shelf under 110 Hz on top of the bands.
 - **Prevent distortion**: lowers the output by exactly as much as you boost, and a soft limiter catches peaks, so heavy bass stays clean.
-- **Menu bar control**: switch the EQ on or off, change presets, and set Bass Boost without opening the window.
+- **Menu bar control**: switch the EQ on or off, change presets, set Bass Boost, and pick the Mac's sound output without opening the window.
+- **Settings** (⌘,): open at login, Dock and menu bar visibility, soft limiter, reset or forget devices, live CPU and memory use, and **Check for Updates** with one-click install.
+- **Liquid Glass** surfaces on macOS 26, with a frosted-glass look on earlier versions. The response curve and faders animate in step with the display, so they run at 120 Hz on ProMotion screens.
 - Presets: Signature Bass (per device), Flat, Bass Boost, Deep Bass, Warm, V-Shape, Loudness, Vocal.
 
 ## Install
@@ -30,6 +32,25 @@ A Mac equalizer that gives each of your headphones and speakers its own sound. I
 If music goes silent after you turn the EQ on, permission was denied. Allow Bassline under **System Settings › Privacy & Security › Screen & System Audio Recording**, or turn the equalizer off to get sound back instantly. Quitting Bassline always returns audio to normal.
 
 **Requires macOS Sonoma 14.2 or later** on an Apple silicon or Intel Mac.
+
+## Updating
+
+Bassline 1.1 and later update themselves: **Settings › Updates › Install and Relaunch**. To update from Terminal instead:
+
+```bash
+osascript -e 'quit app "Bassline"' 2>/dev/null
+curl -L -o /tmp/Bassline.dmg https://github.com/farhanhaque0619/beats/releases/latest/download/Bassline.dmg
+hdiutil attach /tmp/Bassline.dmg -nobrowse -quiet -mountpoint /tmp/BasslineDMG
+rm -rf /Applications/Bassline.app
+ditto /tmp/BasslineDMG/Bassline.app /Applications/Bassline.app
+hdiutil detach /tmp/BasslineDMG -quiet
+xattr -dr com.apple.quarantine /Applications/Bassline.app
+open /Applications/Bassline.app
+```
+
+## Performance
+
+Bassline only processes audio while the current device's EQ is on and not flat. The rest of the time it sits idle in the menu bar. While equalizing, the filters use well under 1% of one CPU core, and the app uses roughly 30–60 MB of memory. Settings › About shows live numbers. The EQ adds about 20 ms of delay, which is small next to Bluetooth's own latency.
 
 ## How it works
 

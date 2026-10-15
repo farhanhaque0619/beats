@@ -1,21 +1,35 @@
+import AppKit
 import SwiftUI
 
 @main
 struct BasslineApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
+    @StateObject private var updater = UpdateChecker()
+    @AppStorage(SettingsKey.showMenuBarIcon) private var showMenuBarIcon = true
 
     var body: some Scene {
         Window("Bassline", id: "main") {
             ContentView()
                 .environmentObject(model)
-                .frame(minWidth: 860, minHeight: 640)
+                .environmentObject(updater)
+                .frame(minWidth: 900, minHeight: 680)
+                .task { updater.checkIfDue() }
         }
-        .defaultSize(width: 1000, height: 760)
+        .defaultSize(width: 1040, height: 800)
         .windowToolbarStyle(.unified)
 
-        MenuBarExtra {
+        Settings {
+            SettingsView()
+                .environmentObject(model)
+                .environmentObject(updater)
+        }
+
+        MenuBarExtra(isInserted: $showMenuBarIcon) {
             MenuBarPanel()
                 .environmentObject(model)
+                .environmentObject(updater)
+                .task { updater.checkIfDue() }
         } label: {
             Image(systemName: "slider.vertical.3")
         }
@@ -23,12 +37,40 @@ struct BasslineApp: App {
     }
 }
 
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: SettingsKey.showInDock) as? Bool == false {
+            NSApp.setActivationPolicy(.accessory)
+        }
+        if defaults.object(forKey: SettingsKey.openWindowAtLaunch) as? Bool == false {
+            DispatchQueue.main.async {
+                for window in NSApp.windows where window.identifier?.rawValue.hasPrefix("main") == true {
+                    window.close()
+                }
+            }
+        }
+    }
+
+    /// Closing the window leaves Bassline running in the menu bar so the EQ keeps working.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+}
+
 extension AppModel {
     /// A binding to one field of a profile that writes through `update`.
-    func binding<Value>(_ id: String, _ keyPath: WritableKeyPath<DeviceProfile, Value>, fallback: Value) -> Binding<Value> {
+    func binding<Value>(
+        _ id: String,
+        _ keyPath: WritableKeyPath<DeviceProfile, Value>,
+        fallback: Value,
+        animation: Animation? = nil
+    ) -> Binding<Value> {
         Binding(
             get: { self.profile(id: id)?[keyPath: keyPath] ?? fallback },
-            set: { newValue in self.update(id) { $0[keyPath: keyPath] = newValue } }
+            set: { newValue in
+                withAnimation(animation) { self.update(id) { $0[keyPath: keyPath] = newValue } }
+            }
         )
     }
 
@@ -37,7 +79,7 @@ extension AppModel {
             get: { self.profile(id: id)?.presetName ?? EQPreset.flat.name },
             set: { name in
                 guard let preset = self.profile(id: id)?.presets.first(where: { $0.name == name }) else { return }
-                self.update(id) { $0.apply(preset) }
+                withAnimation(.smooth(duration: 0.5)) { self.apply(preset, to: id) }
             }
         )
     }

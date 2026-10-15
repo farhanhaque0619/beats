@@ -3,14 +3,22 @@ import CoreAudio
 import Foundation
 import os
 
-/// Applies the EQ to everything the Mac plays.
+/// Applies the EQ to everything the Mac plays, on one output device or several at once.
 ///
 /// It uses a Core Audio process tap (macOS 14.2+) that captures and mutes the system mix,
-/// then plays the equalised result to the real output device through a private aggregate
-/// device. Nothing is installed in the system: when the engine stops or the app quits,
-/// macOS removes the tap and audio goes straight to the device again.
+/// then plays the equalised result to the real output devices through a private aggregate
+/// device. With more than one device, every extra device is clock-corrected against the
+/// first so they stay in step. Nothing is installed in the system: when the engine stops
+/// or the app quits, macOS removes the tap and audio goes straight to the device again.
 final class SystemEQEngine {
     static let aggregateUIDPrefix = "com.bassline.eq."
+
+    /// The output buffers that belong to one device inside the aggregate.
+    struct Route: Equatable {
+        let deviceUID: String
+        let firstBuffer: Int
+        let bufferCount: Int
+    }
 
     let processor = EQProcessor()
     private let logger = Logger(subsystem: "com.bassline.app", category: "engine")
@@ -19,31 +27,36 @@ final class SystemEQEngine {
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
 
-    private(set) var runningDeviceUID: String?
+    private(set) var runningDeviceUIDs: [String] = []
+    private(set) var routes: [Route] = []
     private(set) var sampleRate: Double = 48_000
     private(set) var bufferFrames = 512
 
     /// Extra delay the EQ adds: one buffer in from the tap, one buffer out.
     var addedLatency: TimeInterval { 2 * Double(bufferFrames) / sampleRate }
 
-    var isRunning: Bool { runningDeviceUID != nil }
+    var isRunning: Bool { !runningDeviceUIDs.isEmpty }
 
     static var isSupported: Bool {
         if #available(macOS 14.2, *) { return true }
         return false
     }
 
-    func start(on device: OutputDevice) throws {
+    /// Starts playing through `devices`. The first one is the clock everything follows.
+    func start(on devices: [OutputDevice]) throws {
         stop()
         guard #available(macOS 14.2, *) else {
             throw CoreAudioError("System-wide EQ needs macOS Sonoma 14.2 or later.")
         }
+        guard let main = devices.first else { return }
         do {
+            matchSampleRates(devices)
             try createTap()
-            try createAggregate(outputUID: device.uid)
-            try startIO(outputDeviceID: device.id)
-            runningDeviceUID = device.uid
-            logger.info("EQ running on \(device.name, privacy: .public) at \(self.sampleRate) Hz")
+            try createAggregate(outputs: devices)
+            routes = Self.makeRoutes(devices, aggregateID: aggregateID)
+            try startIO(outputs: devices)
+            runningDeviceUIDs = devices.map(\.uid)
+            logger.info("Playing on \(devices.count) device(s), clock \(main.name, privacy: .public), \(self.sampleRate) Hz")
         } catch {
             stop()
             throw error
@@ -65,7 +78,8 @@ final class SystemEQEngine {
             AudioHardwareDestroyProcessTap(tapID)
         }
         tapID = AudioObjectID(kAudioObjectUnknown)
-        runningDeviceUID = nil
+        runningDeviceUIDs = []
+        routes = []
         processor.reset()
     }
 
@@ -90,17 +104,30 @@ final class SystemEQEngine {
         tapID = newTapID
     }
 
-    private func createAggregate(outputUID: String) throws {
+    /// Extra devices run at the main device's rate when they can, which avoids resampling.
+    private func matchSampleRates(_ devices: [OutputDevice]) {
+        guard devices.count > 1, let rate = HAL.nominalSampleRate(devices[0].id) else { return }
+        for device in devices.dropFirst() where HAL.nominalSampleRate(device.id) != rate {
+            HAL.setNominalSampleRate(device.id, rate)
+        }
+    }
+
+    private func createAggregate(outputs: [OutputDevice]) throws {
+        // Not stacked: each device keeps its own channels, so each can get its own EQ.
+        let subDevices: [[String: Any]] = outputs.enumerated().map { index, device in
+            [
+                kAudioSubDeviceUIDKey: device.uid,
+                kAudioSubDeviceDriftCompensationKey: index > 0,
+            ]
+        }
         let description: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Bassline EQ",
             kAudioAggregateDeviceUIDKey: Self.aggregateUIDPrefix + UUID().uuidString,
-            kAudioAggregateDeviceMainSubDeviceKey: outputUID,
+            kAudioAggregateDeviceMainSubDeviceKey: outputs[0].uid,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
-            kAudioAggregateDeviceSubDeviceListKey: [
-                [kAudioSubDeviceUIDKey: outputUID]
-            ],
+            kAudioAggregateDeviceSubDeviceListKey: subDevices,
             kAudioAggregateDeviceTapListKey: [
                 [
                     kAudioSubTapDriftCompensationKey: true,
@@ -116,11 +143,29 @@ final class SystemEQEngine {
         bufferFrames = HAL.bufferFrameSize(newAggregateID) ?? 512
     }
 
-    private func startIO(outputDeviceID: AudioObjectID) throws {
-        // The aggregate's input streams are the output device's own inputs (for example
-        // the AirPods microphone) followed by the tap. We only read the tap, and switch
-        // the microphone streams off so Bluetooth headphones stay in high-quality mode.
-        let deviceInputStreams = HAL.streamCount(outputDeviceID, scope: kAudioObjectPropertyScopeInput)
+    /// The aggregate lists each device's output streams in order, so device N owns the
+    /// buffers after those of devices 0..<N.
+    private static func makeRoutes(_ devices: [OutputDevice], aggregateID: AudioObjectID) -> [Route] {
+        var routes: [Route] = []
+        var cursor = 0
+        for device in devices {
+            let count = HAL.streamCount(device.id, scope: kAudioObjectPropertyScopeOutput)
+            routes.append(Route(deviceUID: device.uid, firstBuffer: cursor, bufferCount: count))
+            cursor += count
+        }
+        let total = HAL.streamCount(aggregateID, scope: kAudioObjectPropertyScopeOutput)
+        if total != cursor, let first = devices.first {
+            // Unexpected layout: treat everything as the first device rather than mis-route.
+            return [Route(deviceUID: first.uid, firstBuffer: 0, bufferCount: max(total, 1))]
+        }
+        return routes
+    }
+
+    private func startIO(outputs: [OutputDevice]) throws {
+        // The aggregate's input streams are the devices' own inputs (for example the
+        // AirPods microphones) followed by the tap. We only read the tap, and switch the
+        // microphone streams off so Bluetooth headphones stay in high-quality mode.
+        let deviceInputStreams = outputs.reduce(0) { $0 + HAL.streamCount($1.id, scope: kAudioObjectPropertyScopeInput) }
         let processor = self.processor
 
         var newProcID: AudioDeviceIOProcID?

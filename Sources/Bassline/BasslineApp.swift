@@ -18,6 +18,7 @@ struct BasslineApp: App {
         }
         .defaultSize(width: 1040, height: 800)
         .windowToolbarStyle(.unified)
+        .commands { EqualizerCommands(model: model) }
 
         Settings {
             SettingsView()
@@ -34,6 +35,29 @@ struct BasslineApp: App {
             Image(systemName: "slider.vertical.3")
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+struct EqualizerCommands: Commands {
+    let model: AppModel
+
+    var body: some Commands {
+        CommandMenu("Equalizer") {
+            Button("Turn Equalizer On or Off") { model.toggleActiveEQ() }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+            Button("More Bass Boost") { model.nudgeBassBoost(by: 1) }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            Button("Less Bass Boost") { model.nudgeBassBoost(by: -1) }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            Divider()
+            Button("Show Current Device") {
+                if let id = model.activeProfile?.id { model.selectedProfileID = id }
+            }
+            .keyboardShortcut("0", modifiers: .command)
+            Button("Show Multi-Output") { model.selectedProfileID = AppModel.groupSelectionID }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+            Button("Auto-Sync Multi-Output") { model.autoSync() }
+        }
     }
 }
 
@@ -78,14 +102,15 @@ extension AppModel {
         Binding(
             get: { self.profile(id: id)?.presetName ?? EQPreset.flat.name },
             set: { name in
-                guard let preset = self.profile(id: id)?.presets.first(where: { $0.name == name }) else { return }
+                guard let profile = self.profile(id: id),
+                      let preset = self.presets(for: profile).first(where: { $0.name == name }) else { return }
                 withAnimation(.smooth(duration: 0.5)) { self.apply(preset, to: id) }
             }
         )
     }
 
     func status(of profile: DeviceProfile) -> DeviceStatus {
-        if isCurrentOutput(profile) {
+        if isPlaying(profile) {
             if case .failed(let message) = engineStatus, profile.isEnabled { return .failed(message) }
             if case .unsupported = engineStatus { return .unsupported }
             return isProcessing(profile) ? .equalizing : .playingWithoutEQ

@@ -14,12 +14,7 @@ struct ProfileDetailView: View {
                         StatusNotice(profile: profile)
                         PresetStrip(profile: profile)
 
-                        VStack(alignment: .leading, spacing: 10) {
-                            CardTitle("Frequency Response", systemImage: "waveform.path.ecg")
-                            ResponseCurveView(profile: profile)
-                                .frame(height: 210)
-                        }
-                        .glassCard()
+                        ResponseCard(profile: profile)
 
                         VStack(alignment: .leading, spacing: 14) {
                             CardTitle("Bands", systemImage: "slider.vertical.3")
@@ -45,7 +40,6 @@ struct ProfileDetailView: View {
                 .frame(maxWidth: 960)
                 .frame(maxWidth: .infinity)
             }
-            .scrollContentBackground(.hidden)
             .navigationTitle(profile.displayName)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -115,8 +109,8 @@ private struct DeviceHeader: View {
 
             Spacer(minLength: 12)
 
-            if model.isProcessing(profile) {
-                LevelMeter(processor: model.engine.processor, tint: profile.tint, isActive: true)
+            if model.isPlaying(profile) && model.engine.isRunning {
+                LevelMeter(processor: model.engine.processor, route: model.route(for: profile) ?? 0, tint: profile.tint, isActive: true)
                     .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     .help("Output level")
             }
@@ -143,26 +137,153 @@ private struct DeviceHeader: View {
 private struct PresetStrip: View {
     @EnvironmentObject private var model: AppModel
     let profile: DeviceProfile
+    @State private var isSaving = false
+    @State private var newName = ""
+    @State private var nameTaken = false
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             GlassGroup(spacing: 8) {
                 HStack(spacing: 8) {
-                    ForEach(profile.presets) { preset in
+                    ForEach(model.presets(for: profile)) { preset in
                         PresetChip(title: preset.name, isSelected: preset.name == profile.presetName, tint: profile.tint) {
                             withAnimation(.smooth(duration: 0.5)) { model.apply(preset, to: profile.id) }
+                        }
+                        .contextMenu {
+                            if preset.isCustom {
+                                Button("Delete “\(preset.name)”", role: .destructive) {
+                                    withAnimation(.smooth) { model.deleteUserPreset(preset) }
+                                }
+                            }
                         }
                     }
                     if profile.presetName == "Custom" {
                         PresetChip(title: "Custom", isSelected: true, tint: profile.tint) {}
                             .transition(.scale(scale: 0.8).combined(with: .opacity))
                     }
+                    Button {
+                        newName = ""
+                        nameTaken = false
+                        isSaving = true
+                    } label: {
+                        Label("Save Preset", systemImage: "plus")
+                            .font(.callout)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .glassSurface(cornerRadius: 100, interactive: true)
+                    .help("Save these settings as a preset you can use on any device")
+                    .popover(isPresented: $isSaving, arrowEdge: .bottom) { savePopover }
                 }
                 .padding(.vertical, 6)
                 .padding(.horizontal, 2)
             }
         }
         .animation(.smooth(duration: 0.3), value: profile.presetName == "Custom")
+        .animation(.smooth(duration: 0.3), value: model.userPresets)
+    }
+
+    private var savePopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Save Preset").font(.headline)
+            TextField("Name, like “Gym” or “Late Night”", text: $newName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 240)
+                .onSubmit(save)
+            if nameTaken {
+                Text("Choose a name that isn’t already used.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            Text("Saves the bands and Bass Boost. Saved presets appear for every device.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 240, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { isSaving = false }
+                Button("Save", action: save)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(16)
+    }
+
+    private func save() {
+        if model.saveUserPreset(named: newName, from: profile.id) {
+            isSaving = false
+        } else {
+            nameTaken = true
+        }
+    }
+}
+
+// MARK: - Response
+
+private struct ResponseCard: View {
+    @EnvironmentObject private var model: AppModel
+    @AppStorage(SettingsKey.showSpectrum) private var showSpectrum = true
+    let profile: DeviceProfile
+
+    var body: some View {
+        let processing = model.isPlaying(profile) && model.engine.isRunning
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                CardTitle("Frequency Response", systemImage: "waveform.path.ecg")
+                Spacer()
+                if processing && profile.isEnabled && !profile.isFlat {
+                    CompareButton(tint: profile.tint)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            ResponseCurveView(
+                profile: profile,
+                processor: showSpectrum && processing ? model.engine.processor : nil,
+                sampleRate: model.engine.sampleRate,
+                spectrumActive: processing,
+                onBandChange: { band, gain in model.setGain(gain, band: band, for: profile.id) }
+            )
+            .frame(height: 230)
+            Text("Drag the points on the curve, or use the faders below.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .glassCard()
+        .animation(.smooth(duration: 0.3), value: processing)
+    }
+}
+
+/// Press and hold to hear the original sound; let go to hear the EQ again.
+private struct CompareButton: View {
+    @EnvironmentObject private var model: AppModel
+    let tint: Color
+
+    var body: some View {
+        let holding = model.isBypassed
+        Label(holding ? "Original Sound" : "Hold to Compare", systemImage: holding ? "ear.fill" : "ear")
+            .font(.callout.weight(.medium))
+            .foregroundStyle(holding ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background {
+                if holding { Capsule().fill(tint.gradient) }
+            }
+            .glassSurface(cornerRadius: 100, interactive: true)
+            .scaleEffect(holding ? 0.96 : 1)
+            .animation(.snappy(duration: 0.2), value: holding)
+            .contentShape(Capsule())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in model.setBypass(true) }
+                    .onEnded { _ in model.setBypass(false) }
+            )
+            .onDisappear { model.setBypass(false) }
+            .help("Hold to hear your music without the EQ")
+            .accessibilityAddTraits(.isButton)
     }
 }
 

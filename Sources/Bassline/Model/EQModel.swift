@@ -15,9 +15,12 @@ enum EQBands {
     static var flat: [Double] { Array(repeating: 0, count: frequencies.count) }
 }
 
-struct EQPreset: Identifiable, Hashable {
-    let name: String
-    let gains: [Double]
+struct EQPreset: Identifiable, Hashable, Codable {
+    var name: String
+    var gains: [Double]
+    /// Saved presets remember Bass Boost too; built-in ones leave it as it is.
+    var bassBoost: Double?
+    var isCustom = false
     var id: String { name }
 
     static let flat = EQPreset(name: "Flat", gains: EQBands.flat)
@@ -196,6 +199,7 @@ struct DeviceProfile: Codable, Identifiable, Equatable {
 
     mutating func apply(_ preset: EQPreset) {
         gains = preset.gains
+        if let bassBoost = preset.bassBoost { self.bassBoost = bassBoost }
         presetName = preset.name
     }
 

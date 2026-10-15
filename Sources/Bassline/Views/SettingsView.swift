@@ -93,6 +93,7 @@ private struct GeneralSettings: View {
 private struct SoundSettings: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(SettingsKey.limiter) private var limiterEnabled = true
+    @AppStorage(SettingsKey.showSpectrum) private var showSpectrum = true
     @AppStorage(SettingsKey.dismissedPermissionNote) private var dismissedPermissionNote = false
     @State private var confirmingReset = false
 
@@ -104,6 +105,10 @@ private struct SoundSettings: View {
                     Text("Rounds off the loudest peaks so heavy bass never crackles.")
                 }
                 .onChange(of: limiterEnabled) { _, _ in model.settingsDidChange() }
+                Toggle(isOn: $showSpectrum) {
+                    Text("Live spectrum")
+                    Text("Shows the music’s frequencies behind the EQ curve while the window is open.")
+                }
             } header: {
                 Text("Processing")
             } footer: {
@@ -112,6 +117,7 @@ private struct SoundSettings: View {
 
             Section("Devices") {
                 LabeledContent("Saved devices", value: "\(model.profiles.count)")
+                LabeledContent("Saved presets", value: "\(model.userPresets.count)")
                 HStack {
                     Button("Forget Disconnected Devices") {
                         withAnimation(.smooth) { model.forgetDisconnectedDevices() }

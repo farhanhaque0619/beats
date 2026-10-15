@@ -1,3 +1,4 @@
+import AudioToolbox
 import CoreAudio
 import Foundation
 
@@ -67,8 +68,12 @@ enum HAL {
         return ref.takeRetainedValue() as String
     }
 
-    static func uint32(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
-        var addr = address(selector)
+    static func uint32(
+        _ id: AudioObjectID,
+        _ selector: AudioObjectPropertySelector,
+        _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal
+    ) -> UInt32? {
+        var addr = address(selector, scope)
         var value: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
         guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return nil }
@@ -81,6 +86,64 @@ enum HAL {
         var size = UInt32(MemoryLayout<Float64>.size)
         guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr, value > 0 else { return nil }
         return value
+    }
+
+    @discardableResult
+    static func setNominalSampleRate(_ id: AudioObjectID, _ rate: Double) -> Bool {
+        var addr = address(kAudioDevicePropertyNominalSampleRate)
+        var value: Float64 = rate
+        let size = UInt32(MemoryLayout<Float64>.size)
+        return AudioObjectSetPropertyData(id, &addr, 0, nil, size, &value) == noErr
+    }
+
+    /// How far behind real time this device plays, as the driver reports it. Bluetooth
+    /// devices include their codec delay here, which is what makes Auto-Sync work.
+    static func outputLatency(_ id: AudioObjectID) -> TimeInterval {
+        let rate = nominalSampleRate(id) ?? 48_000
+        var frames = Double(uint32(id, kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput) ?? 0)
+        frames += Double(uint32(id, kAudioDevicePropertySafetyOffset, kAudioObjectPropertyScopeOutput) ?? 0)
+        if let stream = outputStreamIDs(id).first {
+            frames += Double(uint32(stream, kAudioStreamPropertyLatency) ?? 0)
+        }
+        return frames / rate
+    }
+
+    static func outputStreamIDs(_ id: AudioObjectID) -> [AudioStreamID] {
+        var addr = address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return [] }
+        var ids = [AudioStreamID](repeating: 0, count: Int(size) / MemoryLayout<AudioStreamID>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids
+    }
+
+    // MARK: Volume
+
+    private static var volumeAddress: AudioObjectPropertyAddress {
+        address(kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioObjectPropertyScopeOutput)
+    }
+
+    /// The device's own volume, 0…1, if it has one.
+    static func volume(_ id: AudioObjectID) -> Float? {
+        var addr = volumeAddress
+        guard AudioObjectHasProperty(id, &addr) else { return nil }
+        var value: Float32 = 0
+        var size = UInt32(MemoryLayout<Float32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return nil }
+        return value
+    }
+
+    static func canSetVolume(_ id: AudioObjectID) -> Bool {
+        var addr = volumeAddress
+        guard AudioObjectHasProperty(id, &addr) else { return false }
+        var settable: DarwinBoolean = false
+        return AudioObjectIsPropertySettable(id, &addr, &settable) == noErr && settable.boolValue
+    }
+
+    static func setVolume(_ id: AudioObjectID, _ volume: Float) {
+        var addr = volumeAddress
+        var value = Float32(min(max(volume, 0), 1))
+        AudioObjectSetPropertyData(id, &addr, 0, nil, UInt32(MemoryLayout<Float32>.size), &value)
     }
 
     static func bufferFrameSize(_ id: AudioObjectID) -> Int? {

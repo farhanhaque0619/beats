@@ -12,7 +12,11 @@ A Mac equalizer that gives each of your headphones and speakers its own sound. E
   - *Beats Studio Pro*: a strong sub and mid-bass lift. Studio Pro is tuned much flatter than older Beats, so this brings the punch back.
   - *AirPods Pro 2*: a smaller lift, because Adaptive EQ already adds some low end.
   - *Marshall Acton III*: the lift sits in the upper bass (64–250 Hz), because the speaker can't reproduce 32 Hz. Turn up the speaker's own **Bass** knob too.
-- **10-band EQ** (32 Hz to 16 kHz) with a live frequency-response curve.
+- **Multi-Output**: play your Mac's sound on up to four devices at once, like two pairs of AirPods, or Beats plus the Marshall. Each device keeps its own EQ and gets its own volume and sync delay. **Auto-Sync** lines up Bluetooth and wired devices using the latency each one reports. Tick devices in the menu bar, or open Multi-Output in the sidebar.
+- **10-band EQ** (32 Hz to 16 kHz) with a live frequency-response curve. Drag the points on the curve or use the faders. A live spectrum of your music plays behind the curve.
+- **Hold to Compare**: press and hold to hear the original sound, let go to hear the EQ.
+- **Saved presets**: save any sound as a named preset and use it on every device.
+- **Keyboard shortcuts**: ⇧⌘E turns the EQ on or off, ⌥⌘↑ and ⌥⌘↓ change Bass Boost, ⇧⌘M opens Multi-Output.
 - **Bass Boost**: one slider that adds a smooth low shelf under 110 Hz on top of the bands.
 - **Prevent distortion**: lowers the output by exactly as much as you boost, and a soft limiter catches peaks, so heavy bass stays clean.
 - **Menu bar control**: switch the EQ on or off, change presets, set Bass Boost, and pick the Mac's sound output without opening the window.
@@ -52,9 +56,15 @@ open /Applications/Bassline.app
 
 Bassline only processes audio while the current device's EQ is on and not flat. The rest of the time it sits idle in the menu bar. While equalizing, the filters use well under 1% of one CPU core, and the app uses roughly 30–60 MB of memory. Settings › About shows live numbers. The EQ adds about 20 ms of delay, which is small next to Bluetooth's own latency.
 
+## Multi-Output tips
+
+- The device chosen as your Mac's sound output is the **Main** device. Volume keys control it; the others have sliders in Bassline.
+- Two Bluetooth headphones share the Mac's Bluetooth bandwidth. If one stutters, move closer to the Mac.
+- If one device sounds early (an echo), press **Auto-Sync**, then nudge that device's delay up a few milliseconds at a time.
+
 ## How it works
 
-Bassline uses Core Audio *process taps*, added in macOS 14.2. It taps the Mac's output mix, mutes the original, runs it through a chain of biquad filters, and plays the result to your real output device through a private aggregate device. No audio driver or system extension is installed. When the EQ is off or the app quits, macOS removes the tap and audio flows directly again.
+Bassline uses Core Audio *process taps*, added in macOS 14.2. It taps the Mac's output mix, mutes the original, runs it through a chain of biquad filters, and plays the result to your real output device through a private aggregate device. For Multi-Output, that aggregate holds several devices with clock drift correction. Each device gets its own filter chain and delay line. No audio driver or system extension is installed. When the EQ is off or the app quits, macOS removes the tap and audio flows directly again.
 
 When a Bluetooth device has a microphone (AirPods, Beats), Bassline turns off that microphone stream so the headphones stay in high-quality stereo mode.
 

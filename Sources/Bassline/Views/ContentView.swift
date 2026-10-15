@@ -11,9 +11,15 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 230, ideal: 260, max: 320)
         } detail: {
             ZStack {
-                AmbientBackground(tint: model.profile(id: model.selectedProfileID)?.tint ?? DeviceKind.other.tint)
+                AmbientBackground(tint: backgroundTint)
 
-                if let id = model.selectedProfileID, model.profile(id: id) != nil {
+                if model.selectedProfileID == AppModel.groupSelectionID {
+                    GroupView()
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
+                            removal: .opacity
+                        ))
+                } else if let id = model.selectedProfileID, model.profile(id: id) != nil {
                     ProfileDetailView(profileID: id)
                         .id(id)
                         .transition(.asymmetric(
@@ -43,11 +49,21 @@ struct ContentView: View {
     }
 }
 
+extension ContentView {
+    private var backgroundTint: Color {
+        if model.selectedProfileID == AppModel.groupSelectionID { return .multiOutput }
+        return model.profile(id: model.selectedProfileID)?.tint ?? DeviceKind.other.tint
+    }
+}
+
 private struct Sidebar: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         List(selection: $model.selectedProfileID) {
+            Section {
+                MultiOutputRow().tag(AppModel.groupSelectionID)
+            }
             Section("My Devices") {
                 ForEach(model.knownProfiles) { profile in
                     DeviceRow(profile: profile).tag(profile.id)
@@ -74,6 +90,32 @@ private struct Sidebar: View {
             EngineFooter()
                 .padding(10)
         }
+    }
+}
+
+private struct MultiOutputRow: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            DeviceBadge(symbol: "hifispeaker.2.fill", tint: .multiOutput, size: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Multi-Output")
+                Text(model.isGroupActive ? "Playing on \(model.activeGroup.count) devices" : "Play on several devices")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.opacity)
+            }
+            Spacer(minLength: 0)
+            if model.isGroupActive {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .foregroundStyle(Color.multiOutput)
+                    .symbolEffect(.variableColor.iterative, options: .repeating)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .padding(.vertical, 3)
+        .animation(.smooth(duration: 0.3), value: model.isGroupActive)
     }
 }
 
@@ -107,6 +149,12 @@ private struct DeviceRow: View {
         .contextMenu {
             if model.isConnected(profile) && !model.isCurrentOutput(profile) {
                 Button("Play Through This Device") { model.playThrough(profile) }
+                if let device = model.device(for: profile) {
+                    Button(model.isInGroup(device) ? "Stop Playing Here Too" : "Also Play Here") {
+                        model.toggleGroupMember(device)
+                    }
+                    .disabled(!model.canAddToGroup(device))
+                }
             }
             Button("Reset EQ") {
                 withAnimation(.smooth(duration: 0.45)) { model.reset(profile.id) }

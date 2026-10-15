@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Animatable EQ values
@@ -40,7 +41,7 @@ struct EQVector: VectorArithmetic {
 
 // MARK: - Response curve
 
-private enum CurveGeometry {
+enum CurveGeometry {
     static let sampleRate = 48_000.0
     static let dbRange = 18.0
     static let minFrequency = 20.0
@@ -146,36 +147,126 @@ private struct CurveGrid: View {
 struct ResponseCurveView: View {
     let profile: DeviceProfile
     var compact = false
+    /// Live spectrum source, drawn behind the curve when set.
+    var processor: EQProcessor? = nil
+    var sampleRate: Double = 48_000
+    var spectrumActive = false
+    /// When set, every band gets a handle on the curve that can be dragged up and down.
+    var onBandChange: ((Int, Double) -> Void)? = nil
 
     var body: some View {
         let insets = compact
             ? EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
-            : EdgeInsets(top: 6, leading: 34, bottom: 24, trailing: 6)
+            : EdgeInsets(top: 8, leading: 34, bottom: 24, trailing: 8)
         let tint = profile.isEnabled ? profile.tint : Color.secondary
         let vector = EQVector(profile)
 
         ZStack {
             CurveGrid(compact: compact, insets: insets)
 
+            if let processor {
+                SpectrumView(processor: processor, sampleRate: sampleRate, tint: tint, isActive: spectrumActive)
+                    .padding(insets)
+                    .transition(.opacity)
+            }
+
             ZStack {
                 ResponseShape(vector: vector, style: .area)
-                    .fill(LinearGradient(colors: [tint.opacity(0.38), tint.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                    .fill(LinearGradient(colors: [tint.opacity(0.34), tint.opacity(0.02)], startPoint: .top, endPoint: .bottom))
                 ResponseShape(vector: vector, style: .line)
                     .stroke(tint.opacity(0.35), style: StrokeStyle(lineWidth: compact ? 5 : 8, lineCap: .round, lineJoin: .round))
                     .blur(radius: compact ? 3 : 6)
                 ResponseShape(vector: vector, style: .line)
                     .stroke(tint, style: StrokeStyle(lineWidth: compact ? 1.75 : 2.5, lineCap: .round, lineJoin: .round))
-                if !compact {
+                if !compact && onBandChange == nil {
                     ResponseShape(vector: vector, style: .markers).fill(.white)
                     ResponseShape(vector: vector, style: .markers).stroke(tint, lineWidth: 1.5)
                 }
             }
             .padding(insets)
             .drawingGroup()
+            .allowsHitTesting(false)
+
+            if let onBandChange, !compact {
+                CurveHandles(profile: profile, tint: tint, onChange: onBandChange)
+                    .padding(insets)
+            }
         }
-        .accessibilityElement()
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Frequency response")
         .accessibilityValue(String(format: "Peak boost %.1f decibels", profile.peakBoostDB()))
+    }
+}
+
+/// One grab point per band, sitting on the curve. Dragging moves that band's gain.
+private struct CurveHandles: View {
+    let profile: DeviceProfile
+    let tint: Color
+    let onChange: (Int, Double) -> Void
+
+    @State private var dragging: (band: Int, startGain: Double)?
+    @State private var hovered: Int?
+
+    var body: some View {
+        GeometryReader { geo in
+            let rect = CGRect(origin: .zero, size: geo.size)
+            let filters = profile.filters(sampleRate: CurveGeometry.sampleRate)
+            ForEach(EQBands.frequencies.indices, id: \.self) { band in
+                let frequency = EQBands.frequencies[band]
+                let response = DeviceProfile.response(at: frequency, filters: filters, sampleRate: CurveGeometry.sampleRate)
+                let isActive = dragging?.band == band
+                let isSet = abs(profile.gains[band]) >= 0.05
+                ZStack {
+                    Circle()
+                        .fill(isActive || isSet ? Color.white : Color.white.opacity(0.75))
+                        .overlay(Circle().strokeBorder(tint, lineWidth: isActive ? 2.5 : 1.5))
+                        .shadow(color: tint.opacity(isActive ? 0.6 : 0.25), radius: isActive ? 8 : 3)
+                        .frame(width: 13, height: 13)
+                        .scaleEffect(isActive ? 1.35 : (hovered == band ? 1.2 : 1))
+                        .opacity(isSet || isActive || hovered == band ? 1 : 0.55)
+                    if isActive || hovered == band {
+                        Text(String(format: "%@  %+.1f dB", EQBands.labels[band], profile.gains[band]))
+                            .font(.caption2.monospacedDigit().weight(.semibold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .glassSurface(cornerRadius: 100)
+                            .fixedSize()
+                            .offset(y: -22)
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
+                }
+                .frame(width: 30, height: 30)
+                .contentShape(Circle())
+                .position(x: CurveGeometry.x(frequency, in: rect), y: CurveGeometry.y(response, in: rect))
+                .animation(.snappy(duration: 0.18), value: isActive)
+                .animation(.snappy(duration: 0.18), value: hovered == band)
+                .onHover { inside in hovered = inside ? band : (hovered == band ? nil : hovered) }
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { drag in
+                            if dragging?.band != band { dragging = (band, profile.gains[band]) }
+                            let start = dragging?.startGain ?? profile.gains[band]
+                            let perPoint = 2 * CurveGeometry.dbRange / Double(max(rect.height, 1))
+                            var gain = start - Double(drag.translation.height) * perPoint
+                            gain = min(max(gain, EQBands.range.lowerBound), EQBands.range.upperBound)
+                            if abs(gain) < 0.35 { gain = 0 }
+                            if gain == 0, profile.gains[band] != 0 { Haptics.tick() }
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) { onChange(band, gain) }
+                        }
+                        .onEnded { _ in dragging = nil }
+                )
+                .help("\(EQBands.labels[band]) Hz. Drag up or down.")
+            }
+        }
+    }
+}
+
+enum Haptics {
+    /// A light tick on Force Touch trackpads, used when a control snaps to 0 dB.
+    static func tick() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
 }
 
@@ -237,6 +328,7 @@ struct VerticalGainSlider: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
                         let newValue = self.value(for: drag.location.y, height: height)
+                        if newValue == 0, shownValue != 0 { Haptics.tick() }
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
                         withTransaction(transaction) {
@@ -288,6 +380,7 @@ struct VerticalGainSlider: View {
 /// Left/right output level, redrawn every display frame while audio is being processed.
 struct LevelMeter: View {
     let processor: EQProcessor
+    var route = 0
     let tint: Color
     let isActive: Bool
     var height: CGFloat = 36
@@ -295,8 +388,8 @@ struct LevelMeter: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: nil, paused: !isActive)) { _ in
             HStack(spacing: 3) {
-                bar(isActive ? processor.meterLevel(0) : 0)
-                bar(isActive ? processor.meterLevel(1) : 0)
+                bar(isActive ? processor.meterLevel(route: route, channel: 0) : 0)
+                bar(isActive ? processor.meterLevel(route: route, channel: 1) : 0)
             }
         }
         .frame(height: height)

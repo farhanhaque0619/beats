@@ -1,0 +1,51 @@
+name: Build Mac App
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Build Bassline.app
+        run: ./scripts/build-app.sh
+
+      - name: Package DMG
+        run: ./scripts/make-dmg.sh
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bassline
+          path: build/Bassline.dmg
+          if-no-files-found: error
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist)
+          TAG="v$VERSION"
+          NOTES="Download **Bassline.dmg** below, open it, and drag Bassline into Applications.
+
+          The first time you open it, macOS may say it can't verify the developer. Open System Settings › Privacy & Security, scroll down, and click **Open Anyway**.
+
+          Built from ${GITHUB_SHA::7} on \`${GITHUB_REF_NAME}\`."
+          gh release delete "$TAG" --cleanup-tag --yes 2>/dev/null || true
+          gh release create "$TAG" build/Bassline.dmg \
+            --target "$GITHUB_SHA" \
+            --title "Bassline $VERSION" \
+            --notes "$NOTES"

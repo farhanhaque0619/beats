@@ -7,5 +7,8 @@ enum Page {
     static let performance = "performance"
     static let tools = "tools"
 
-    static let all: Set<String> = [overview, display, performance, tools, SoundModel.groupSelectionID, SoundModel.appsSelectionID]
+    static let multiOutput = "multi-output"
+    static let appSound = "app-sound"
+
+    static let all: Set<String> = [overview, display, performance, tools, multiOutput, appSound]
 }

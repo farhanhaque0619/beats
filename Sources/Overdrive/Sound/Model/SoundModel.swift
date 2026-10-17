@@ -35,9 +35,9 @@ enum SettingsKey {
 @MainActor
 final class SoundModel: ObservableObject {
     /// Sidebar selection for the Multi-Output page.
-    static let groupSelectionID = "multi-output"
+    static let groupSelectionID = Page.multiOutput
     /// Sidebar selection for the App Sound page.
-    static let appsSelectionID = "app-sound"
+    static let appsSelectionID = Page.appSound
     static let maxGroupSize = EQProcessor.maxRoutes
 
     @Published private(set) var profiles: [DeviceProfile] = []

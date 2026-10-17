@@ -83,7 +83,7 @@ struct PageScroll<Content: View>: View {
 struct Sparkline: View {
     let values: [Double]
     var maximum: Double? = nil
-    var capacity = SystemMonitor.historyLength
+    var capacity = 90
 
     var body: some View {
         let tint = Theme.accent

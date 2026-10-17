@@ -4,12 +4,12 @@ import SwiftUI
 
 extension Color {
     /// App Sound's own colour.
-    static let appSound = Color(red: 0.96, green: 0.45, blue: 0.20)
+    static var appSound: Color { Theme.accent }
 }
 
 /// Volume and EQ for each app.
 struct AppsView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
 
     private let poll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -50,7 +50,7 @@ struct AppsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("Turn EQ off for FaceTime, Zoom or Teams so voices on calls sound natural.", systemImage: "phone")
                         Label("Apps set to skip the EQ still play on every Multi-Output device, unchanged.", systemImage: "hifispeaker.2")
-                        Label("Changing an app for the first time briefly restarts Bassline’s audio.", systemImage: "info.circle")
+                        Label("Changing an app for the first time briefly restarts Overdrive’s audio.", systemImage: "info.circle")
                     }
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -70,7 +70,7 @@ struct AppsView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 18) {
             DeviceBadge(symbol: "square.stack.3d.up.fill", tint: .appSound, size: 72)
-                .shadow(color: Color.appSound.opacity(0.4), radius: 12, y: 6)
+                .shadow(color: .black.opacity(0.08), radius: 6, y: 3)
             VStack(alignment: .leading, spacing: 6) {
                 Text("App Sound")
                     .font(.system(size: 30, weight: .semibold, design: .rounded))
@@ -113,7 +113,7 @@ struct AppsView: View {
 }
 
 private struct AppRow: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     let app: AudioApp
 
     var body: some View {

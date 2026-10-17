@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "Bassline",
+    name: "Overdrive",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "Bassline",
-            path: "Sources/Bassline"
+            name: "Overdrive",
+            path: "Sources/Overdrive"
         )
     ]
 )

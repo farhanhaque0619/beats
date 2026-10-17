@@ -90,7 +90,7 @@ final class UpdateChecker: ObservableObject {
         let appPath = Bundle.main.bundlePath
         do {
             let (downloaded, _) = try await URLSession.shared.download(from: release.dmgURL)
-            let dmg = FileManager.default.temporaryDirectory.appendingPathComponent("Bassline-\(release.version).dmg")
+            let dmg = FileManager.default.temporaryDirectory.appendingPathComponent("Overdrive-\(release.version).dmg")
             try? FileManager.default.removeItem(at: dmg)
             try FileManager.default.moveItem(at: downloaded, to: dmg)
 
@@ -100,7 +100,7 @@ final class UpdateChecker: ObservableObject {
 
             Self.relaunch(appPath: appPath)
         } catch {
-            state = .failed("The update couldn’t be installed automatically. Download the DMG and drag Bassline into Applications instead.")
+            state = .failed("The update couldn’t be installed automatically. Download the DMG and drag Overdrive into Applications instead.")
         }
     }
 
@@ -123,8 +123,12 @@ final class UpdateChecker: ObservableObject {
         MOUNT=$(mktemp -d /tmp/bassline-update.XXXXXX)
         hdiutil attach "$DMG" -nobrowse -noverify -noautoopen -quiet -mountpoint "$MOUNT"
         trap 'hdiutil detach "$MOUNT" -quiet -force >/dev/null 2>&1 || true' EXIT
+        SRC="$MOUNT/Overdrive.app"
+        [ -d "$SRC" ] || SRC=$(find "$MOUNT" -maxdepth 1 -name '*.app' -print -quit)
+        [ -n "$SRC" ] && [ -d "$SRC" ]
         rm -rf "$APP.new"
-        ditto "$MOUNT/Bassline.app" "$APP.new"
+        ditto "$SRC" "$APP.new"
+        chflags nohidden "$APP.new" 2>/dev/null || true
         xattr -dr com.apple.quarantine "$APP.new" 2>/dev/null || true
         rm -rf "$APP"
         mv "$APP.new" "$APP"

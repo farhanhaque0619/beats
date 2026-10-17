@@ -1,17 +1,30 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Device colours
+// MARK: - Theme
+
+enum AccentStyle: String, CaseIterable, Identifiable {
+    case system
+    case graphite
+
+    var id: String { rawValue }
+    var title: String { self == .system ? "System Accent" : "Graphite" }
+}
+
+/// One restrained accent for the whole app: the Mac's own accent colour, or graphite.
+/// Everything else is neutral, so the screen stays calm.
+enum Theme {
+    static var accentStyle: AccentStyle {
+        AccentStyle(rawValue: UserDefaults.standard.string(forKey: SettingsKey.accentStyle) ?? "") ?? .system
+    }
+
+    static var accent: Color {
+        accentStyle == .graphite ? Color(nsColor: .systemGray) : Color.accentColor
+    }
+}
 
 extension DeviceKind {
-    var tint: Color {
-        switch self {
-        case .beatsStudioPro: Color(red: 0.93, green: 0.17, blue: 0.27)
-        case .airPodsPro2: Color(red: 0.16, green: 0.53, blue: 1.0)
-        case .marshallActon3: Color(red: 0.85, green: 0.60, blue: 0.22)
-        case .other: Color(red: 0.45, green: 0.40, blue: 0.96)
-        }
-    }
+    var tint: Color { Theme.accent }
 }
 
 extension DeviceProfile {
@@ -43,7 +56,7 @@ struct GlassSurface: ViewModifier {
     @available(macOS 26.0, *)
     private var glass: Glass {
         var glass = Glass.regular
-        if let tint { glass = glass.tint(tint.opacity(0.18)) }
+        if let tint { glass = glass.tint(tint.opacity(0.06)) }
         if interactive { glass = glass.interactive() }
         return glass
     }
@@ -55,7 +68,7 @@ struct GlassSurface: ViewModifier {
             .background {
                 ZStack {
                     shape.fill(.regularMaterial)
-                    if let tint { shape.fill(tint.opacity(0.10)) }
+                    if let tint { shape.fill(tint.opacity(0.04)) }
                 }
             }
             .overlay {
@@ -112,9 +125,8 @@ struct AmbientBackground: View {
     var body: some View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
-            RadialGradient(colors: [tint.opacity(0.30), .clear], center: UnitPoint(x: 0.08, y: 0.0), startRadius: 0, endRadius: 560)
-            RadialGradient(colors: [tint.opacity(0.16), .clear], center: UnitPoint(x: 1.0, y: 0.55), startRadius: 0, endRadius: 520)
-            RadialGradient(colors: [tint.opacity(0.10), .clear], center: UnitPoint(x: 0.3, y: 1.05), startRadius: 0, endRadius: 480)
+            RadialGradient(colors: [tint.opacity(0.07), .clear], center: UnitPoint(x: 0.08, y: 0.0), startRadius: 0, endRadius: 620)
+            RadialGradient(colors: [Color.primary.opacity(0.035), .clear], center: UnitPoint(x: 1.0, y: 0.7), startRadius: 0, endRadius: 560)
         }
         .ignoresSafeArea()
         .animation(.smooth(duration: 0.6), value: tint)
@@ -123,27 +135,23 @@ struct AmbientBackground: View {
 
 // MARK: - Small shared pieces
 
-/// Device icon on a glossy coloured tile.
+/// Device or section icon on a quiet, neutral tile.
 struct DeviceBadge: View {
     let symbol: String
-    let tint: Color
+    var tint: Color = Theme.accent
     var size: CGFloat = 28
     var dimmed = false
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
         ZStack {
-            RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                .fill(tint.gradient)
-            RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                .fill(LinearGradient(colors: [.white.opacity(0.35), .clear], startPoint: .top, endPoint: .center))
+            shape.fill(Color.primary.opacity(dimmed ? 0.04 : 0.07))
+            shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
             Image(systemName: symbol)
-                .font(.system(size: size * 0.48, weight: .medium))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.15), radius: 1, y: 0.5)
+                .font(.system(size: size * 0.46, weight: .medium))
+                .foregroundStyle(dimmed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
         }
         .frame(width: size, height: size)
-        .saturation(dimmed ? 0 : 1)
-        .opacity(dimmed ? 0.55 : 1)
     }
 }
 
@@ -187,7 +195,7 @@ struct PresetChip: View {
                     if isSelected {
                         Capsule()
                             .fill(tint.gradient)
-                            .shadow(color: tint.opacity(0.45), radius: 8, y: 3)
+                            .shadow(color: tint.opacity(0.18), radius: 6, y: 2)
                     }
                 }
                 .contentShape(Capsule())

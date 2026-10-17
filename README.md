@@ -1,95 +1,76 @@
-# Bassline
+# Overdrive
 
-A Mac equalizer that gives each of your headphones and speakers its own sound. Every output your Mac can play through gets its own EQ: built-in speakers, displays, USB DACs, AirPlay and any Bluetooth device. **Beats Studio Pro**, **AirPods Pro 2**, and **Marshall Acton III** also get tuned bass-forward starting points. Bassline switches to the right EQ the moment your Mac starts playing through a device.
+A control center for your Mac: sound, display, performance and power-user tools in one quiet, native app. Overdrive started life as **Bassline**, a per-device equalizer. Everything Bassline did lives in the Sound section.
 
-<img src="Resources/AppIcon.png" width="128" alt="Bassline icon">
+<img src="Resources/AppIcon.png" width="128" alt="Overdrive icon">
 
-## What it does
+## Sections
 
-- **Works on everything your Mac plays**: Spotify, Apple Music, YouTube in Safari or Chrome, games, all of it.
-- **A separate profile for each device.** Connect your Beats and the Beats EQ turns on. Switch to AirPods and the AirPods EQ takes over. New devices appear on their own and start flat.
-- **Bass-forward starting points** written for each product:
-  - *Beats Studio Pro*: a strong sub and mid-bass lift. Studio Pro is tuned much flatter than older Beats, so this brings the punch back.
-  - *AirPods Pro 2*: a smaller lift, because Adaptive EQ already adds some low end.
-  - *Marshall Acton III*: the lift sits in the upper bass (64–250 Hz), because the speaker can't reproduce 32 Hz. Turn up the speaker's own **Bass** knob too.
-- **Multi-Output**: play your Mac's sound on up to four devices at once, like two pairs of AirPods, or Beats plus the Marshall. Each device keeps its own EQ and gets its own volume and sync delay. **Auto-Sync** lines up Bluetooth and wired devices using the latency each one reports. Tick devices in the menu bar, or open Multi-Output in the sidebar.
-- **Speaker roles** in Multi-Output: **Vocals**, **Music & Bass**, **Bass Only** or **Full Sound** per device. Vocals plays the centre of the mix without the bass. Music & Bass turns the centred vocal band down and keeps the instruments and low end. **Smart Split** gives your MacBook speakers the vocals and every other speaker the music and bass.
-- **App Sound**: a volume for each app, and a switch to let an app skip the EQ (handy for FaceTime or Zoom calls). Works with browsers and other apps that play from helper processes.
-- **Battery levels** for AirPods, Beats and other Bluetooth headphones (left, right and case where available), in the sidebar, device page, Multi-Output and the menu bar.
-- **10-band EQ** (32 Hz to 16 kHz) with a live frequency-response curve. Drag the points on the curve or use the faders. A live spectrum of your music plays behind the curve.
-- **Hold to Compare**: press and hold to hear the original sound, let go to hear the EQ.
-- **Saved presets**: save any sound as a named preset and use it on every device.
-- **Keyboard shortcuts**: ⇧⌘E turns the EQ on or off, ⌥⌘↑ and ⌥⌘↓ change Bass Boost, ⇧⌘M opens Multi-Output, ⇧⌘A opens App Sound.
-- **Bass Boost**: one slider that adds a smooth low shelf under 110 Hz on top of the bands.
-- **Prevent distortion**: lowers the output by exactly as much as you boost, and a soft limiter catches peaks, so heavy bass stays clean.
-- **Menu bar control**: switch the EQ on or off, change presets, set Bass Boost, and pick the Mac's sound output without opening the window.
-- **Settings** (⌘,): open at login, Dock and menu bar visibility, soft limiter, reset or forget devices, live CPU and memory use, and **Check for Updates** with one-click install.
-- **Liquid Glass** surfaces on macOS 26, with a frosted-glass look on earlier versions. The response curve and faders animate in step with the display, so they run at 120 Hz on ProMotion screens.
-- Presets: Signature Bass (per device), Flat, Bass Boost, Deep Bass, Warm, V-Shape, Loudness, Vocal.
+### Overview
+The state of your Mac at a glance: what's playing and where, CPU, memory, GPU and temperature gauges, Extra Brightness, Keep Awake and the microphone. Each tile jumps to its page.
+
+### Sound
+- **An EQ for every output**: built-in speakers, displays, USB, AirPlay and Bluetooth. Beats Studio Pro, AirPods Pro 2 and Marshall Acton III get tuned bass-forward starting points. The right EQ switches on as soon as your Mac plays through a device.
+- **10-band EQ** with a draggable response curve, a live spectrum, Bass Boost, Hold to Compare, saved presets and distortion protection.
+- **Multi-Output**: play on up to four devices at once, each with its own EQ, volume and sync delay. **Auto-Sync** lines devices up. **Speaker roles** split the music: Vocals, Music & Bass, Bass Only or Full Sound, with **Smart Split** for MacBook speakers plus a bigger speaker.
+- **App Sound**: a volume for each app, and a switch to let calls skip the EQ.
+- **Battery levels** for AirPods, Beats and other Bluetooth headphones.
+
+### Display
+- **Extra Brightness** for XDR displays (14- and 16-inch MacBook Pro, Pro Display XDR): goes past the normal brightness limit using the panel's HDR headroom. This is the same technique BrightIntosh and Vivid use, and it has guard rails:
+  - Capped at +60%, the level those apps treat as the safe maximum.
+  - Pauses automatically when macOS reports the Mac is running hot, and when the battery drops below a level you choose.
+  - The change lives in the display's colour table, which macOS restores the moment Overdrive quits, even after a crash. The panel's firmware keeps enforcing its own power and heat limits.
+- **Brightness** and **Dim** (below the normal minimum) for every display.
+- **Resolution**: every scaled resolution and refresh rate your display supports.
+
+### Performance
+CPU (per core), GPU, memory and memory pressure, CPU/GPU/battery temperatures, fan speeds, system power draw, battery health and cycle count, network and disk throughput, free space, and the busiest apps. It only samples while you're looking, so it costs nothing in the background. Settings can also put CPU and temperature in the menu bar.
+
+### Tools
+- **Keep Awake** for 15 minutes up to indefinitely, with or without letting the display sleep.
+- **Microphone mute** for every app at once.
+- **Finder and Dock**: show hidden files, show all file extensions, hide desktop icons, hide the Dock automatically.
+- **Quick actions**: sleep displays, eject all disks, restart the Dock, Finder or the menu bar, open Activity Monitor.
+
+### Keyboard shortcuts
+⌘1 Overview · ⌘2 current sound device · ⌘3 Displays · ⌘4 Performance · ⌘5 Tools · ⇧⌘M Multi-Output · ⇧⌘A App Sound · ⇧⌘E EQ on/off · ⌥⌘↑/↓ Bass Boost · ⌥⌘B Extra Brightness · ⌥⌘K Keep Awake · ⌥⌘M mute microphone.
 
 ## Install
 
-1. Open the [latest release](https://github.com/farhanhaque0619/beats/releases/latest) and download **Bassline.dmg**.
-2. Open the DMG and drag **Bassline** into **Applications**.
-3. Open Bassline. The app isn't notarized by Apple, so the first launch is blocked:
-   - Open **System Settings › Privacy & Security**, scroll down, and click **Open Anyway** next to the Bassline message.
-   - Or in Terminal: `xattr -dr com.apple.quarantine /Applications/Bassline.app`
-4. When macOS asks whether Bassline can access system audio, click **Allow**. Bassline needs this to process the sound. Audio is never recorded or saved.
+1. Download **Overdrive.dmg** from the [latest release](https://github.com/farhanhaque0619/beats/releases/latest).
+2. Open it and drag **Overdrive** into **Applications**.
+3. The app isn't notarized, so the first launch is blocked. Open **System Settings › Privacy & Security** and click **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Overdrive.app`.
+4. Allow system audio access when asked; the equalizer needs it. Audio is never recorded or saved.
 
-If music goes silent after you turn the EQ on, permission was denied. Allow Bassline under **System Settings › Privacy & Security › Screen & System Audio Recording**, or turn the equalizer off to get sound back instantly. Quitting Bassline always returns audio to normal.
+**Coming from Bassline?** Use **Settings › Updates › Install and Relaunch** in Bassline. It installs Overdrive, which renames itself from Bassline.app to Overdrive.app and keeps all your settings.
 
-**Requires macOS Sonoma 14.2 or later** on an Apple silicon or Intel Mac.
+Requires macOS Sonoma 14.2 or later.
 
-## Updating
-
-Bassline 1.1 and later update themselves: **Settings › Updates › Install and Relaunch**. To update from Terminal instead:
+## Updating from Terminal
 
 ```bash
-osascript -e 'quit app "Bassline"' 2>/dev/null
-curl -L -o /tmp/Bassline.dmg https://github.com/farhanhaque0619/beats/releases/latest/download/Bassline.dmg
-hdiutil attach /tmp/Bassline.dmg -nobrowse -quiet -mountpoint /tmp/BasslineDMG
-rm -rf /Applications/Bassline.app
-ditto /tmp/BasslineDMG/Bassline.app /Applications/Bassline.app
-hdiutil detach /tmp/BasslineDMG -quiet
-xattr -dr com.apple.quarantine /Applications/Bassline.app
-open /Applications/Bassline.app
+osascript -e 'quit app "Overdrive"' -e 'quit app "Bassline"' 2>/dev/null
+curl -L -o /tmp/Overdrive.dmg https://github.com/farhanhaque0619/beats/releases/latest/download/Overdrive.dmg
+hdiutil attach /tmp/Overdrive.dmg -nobrowse -quiet -mountpoint /tmp/OverdriveDMG
+rm -rf /Applications/Overdrive.app /Applications/Bassline.app
+ditto /tmp/OverdriveDMG/Overdrive.app /Applications/Overdrive.app
+hdiutil detach /tmp/OverdriveDMG -quiet
+xattr -dr com.apple.quarantine /Applications/Overdrive.app
+open /Applications/Overdrive.app
 ```
-
-## Performance
-
-Bassline only processes audio while the current device's EQ is on and not flat. The rest of the time it sits idle in the menu bar. While equalizing, the filters use well under 1% of one CPU core, and the app uses roughly 30–60 MB of memory. Settings › About shows live numbers. The EQ adds about 20 ms of delay, which is small next to Bluetooth's own latency.
-
-## Multi-Output tips
-
-- The device chosen as your Mac's sound output is the **Main** device. Volume keys control it; the others have sliders in Bassline.
-- Two Bluetooth headphones share the Mac's Bluetooth bandwidth. If one stutters, move closer to the Mac.
-- If one device sounds early (an echo), press **Auto-Sync**, then nudge that device's delay up a few milliseconds at a time.
 
 ## How it works
 
-Bassline uses Core Audio *process taps*, added in macOS 14.2. It taps the Mac's output mix, mutes the original, runs it through a chain of biquad filters, and plays the result to your real output device through a private aggregate device. For Multi-Output, that aggregate holds several devices with clock drift correction. Each device gets its own filter chain and delay line. No audio driver or system extension is installed. When the EQ is off or the app quits, macOS removes the tap and audio flows directly again.
-
-When a Bluetooth device has a microphone (AirPods, Beats), Bassline turns off that microphone stream so the headphones stay in high-quality stereo mode.
-
-## Limits
-
-- Bassline changes what your **Mac** plays. It can't write settings into the headphones themselves, so it doesn't affect them when they're connected to your iPhone. On iPhone you can get a similar effect with Settings › Apps › Music › EQ › **Bass Booster** (Apple Music), Spotify's built-in Equalizer, or Settings › Accessibility › Audio & Visual › **Headphone Accommodations**.
-- The app is signed ad hoc, not with an Apple Developer ID. After you install an update, macOS may ask for audio permission again.
+- **Sound** uses Core Audio process taps (macOS 14.2+). The Mac's output is tapped and muted, run through per-device biquad filter chains, and played to the real devices through a private aggregate device. Nothing is installed in the system.
+- **Extra Brightness** keeps a 2-pixel EDR (HDR) surface on screen, hidden under the display's rounded corner, so the panel enters HDR mode. It then scales the display's gamma table into the extra headroom.
+- **Temperatures and fans** are read from the System Management Controller, falling back to the HID temperature sensors on newer chips. **GPU load** comes from the GPU driver's performance statistics, and **memory** from the kernel's VM statistics, using Activity Monitor's definition of "Memory Used".
 
 ## Build from source
 
-You need macOS 14.2+ and Xcode 15.3 or later.
-
 ```bash
-./scripts/build-app.sh   # builds build/Bassline.app (universal)
-./scripts/make-dmg.sh    # packages build/Bassline.dmg
+./scripts/build-app.sh   # build/Overdrive.app (universal)
+./scripts/make-dmg.sh    # build/Overdrive.dmg
 ```
 
-Every push runs the same build on GitHub Actions (`.github/workflows/build.yml`), attaches the DMG to the workflow run, and updates the GitHub release.
-
-```
-Sources/Bassline/
-  Audio/   Core Audio device helpers, the realtime EQ processor, and the tap engine
-  Model/   Device profiles, presets, filter design, and app state
-  Views/   SwiftUI window, band sliders, response curve, and menu bar panel
-```
+Every push builds on GitHub Actions and updates the release.

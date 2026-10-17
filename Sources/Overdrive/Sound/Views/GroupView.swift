@@ -3,12 +3,12 @@ import SwiftUI
 
 extension Color {
     /// Multi-Output's own colour, between the device colours.
-    static let multiOutput = Color(red: 0.12, green: 0.72, blue: 0.70)
+    static var multiOutput: Color { Theme.accent }
 }
 
 /// Play the Mac's sound on several headphones and speakers at once.
 struct GroupView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
 
     var body: some View {
         ScrollView {
@@ -46,7 +46,7 @@ struct GroupView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 18) {
             DeviceBadge(symbol: "hifispeaker.2.fill", tint: .multiOutput, size: 72)
-                .shadow(color: Color.multiOutput.opacity(0.4), radius: 12, y: 6)
+                .shadow(color: .black.opacity(0.08), radius: 6, y: 3)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Multi-Output")
                     .font(.system(size: 30, weight: .semibold, design: .rounded))
@@ -180,7 +180,7 @@ struct GroupView: View {
 }
 
 private struct GroupDeviceRow: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var battery: BatteryMonitor
     let device: OutputDevice
 

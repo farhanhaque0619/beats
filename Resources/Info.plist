@@ -5,9 +5,9 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Bassline</string>
+	<string>Overdrive</string>
 	<key>CFBundleExecutable</key>
-	<string>Bassline</string>
+	<string>Overdrive</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
@@ -15,19 +15,19 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Bassline</string>
+	<string>Overdrive</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.3.0</string>
+	<string>2.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>5</string>
 	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.music</string>
+	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.2</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Bassline routes your Mac’s audio through its equalizer so you can shape the sound of your headphones and speakers. Audio is processed live and never recorded or saved.</string>
+	<string>Overdrive routes your Mac’s audio through its equalizer so you can shape the sound of your headphones and speakers. Audio is processed live and never recorded or saved.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

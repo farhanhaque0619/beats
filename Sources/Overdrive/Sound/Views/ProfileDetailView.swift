@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ProfileDetailView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     let profileID: String
 
     var body: some View {
@@ -75,7 +75,7 @@ private struct CardTitle: View {
 // MARK: - Header
 
 private struct DeviceHeader: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var battery: BatteryMonitor
     let profile: DeviceProfile
 
@@ -83,7 +83,7 @@ private struct DeviceHeader: View {
         let status = model.status(of: profile)
         HStack(alignment: .center, spacing: 18) {
             DeviceBadge(symbol: profile.symbolName, tint: profile.tint, size: 72, dimmed: status == .disconnected)
-                .shadow(color: profile.tint.opacity(0.4), radius: 12, y: 6)
+                .shadow(color: .black.opacity(0.08), radius: 6, y: 3)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(profile.displayName)
@@ -143,7 +143,7 @@ private struct DeviceHeader: View {
 // MARK: - Presets
 
 private struct PresetStrip: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     let profile: DeviceProfile
     @State private var isSaving = false
     @State private var newName = ""
@@ -233,7 +233,7 @@ private struct PresetStrip: View {
 // MARK: - Response
 
 private struct ResponseCard: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @AppStorage(SettingsKey.showSpectrum) private var showSpectrum = true
     let profile: DeviceProfile
 
@@ -267,7 +267,7 @@ private struct ResponseCard: View {
 
 /// Press and hold to hear the original sound; let go to hear the EQ again.
 private struct CompareButton: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     let tint: Color
 
     var body: some View {
@@ -298,7 +298,7 @@ private struct CompareButton: View {
 // MARK: - Notices
 
 private struct StatusNotice: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @AppStorage(SettingsKey.dismissedPermissionNote) private var dismissedPermissionNote = false
     let profile: DeviceProfile
 
@@ -310,7 +310,7 @@ private struct StatusNotice: View {
                     symbol: "exclamationmark.triangle.fill",
                     tint: .orange,
                     title: "The equalizer couldn’t start",
-                    message: "\(message). Check that Bassline is allowed to access system audio, then try again."
+                    message: "\(message). Check that Overdrive is allowed to access system audio, then try again."
                 ) {
                     Button("Open Privacy Settings", action: PrivacySettings.open)
                     Button("Try Again") { model.retry() }
@@ -320,15 +320,15 @@ private struct StatusNotice: View {
                 Notice(
                     symbol: "exclamationmark.triangle.fill",
                     tint: .orange,
-                    title: "Update macOS to use Bassline",
+                    title: "Update macOS to use Overdrive",
                     message: "System-wide EQ uses audio features added in macOS Sonoma 14.2."
                 ) { EmptyView() }
             case .equalizing where !dismissedPermissionNote:
                 Notice(
                     symbol: "lock.shield",
                     tint: profile.tint,
-                    title: "Allow Bassline to hear your Mac’s audio",
-                    message: "If music goes silent, allow Bassline under Privacy & Security › Screen & System Audio Recording. Turning the equalizer off restores sound instantly."
+                    title: "Allow Overdrive to hear your Mac’s audio",
+                    message: "If music goes silent, allow Overdrive under Privacy & Security › Screen & System Audio Recording. Turning the equalizer off restores sound instantly."
                 ) {
                     Button("Open Privacy Settings", action: PrivacySettings.open)
                     Button("Got It") { withAnimation(.smooth) { dismissedPermissionNote = true } }
@@ -386,7 +386,7 @@ private struct Notice<Actions: View>: View {
 // MARK: - Bands
 
 private struct BandSliders: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     let profile: DeviceProfile
 
     var body: some View {
@@ -449,7 +449,7 @@ private struct ScaleColumn: View {
 // MARK: - Bass and output
 
 private struct BassBoostCard: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     let profile: DeviceProfile
 
     var body: some View {
@@ -483,7 +483,7 @@ private struct BassBoostCard: View {
 }
 
 private struct OutputCard: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     let profile: DeviceProfile
 
     var body: some View {

@@ -27,7 +27,7 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Build Bassline.app
+      - name: Build Overdrive.app
         run: ./scripts/build-app.sh
 
       - name: Package DMG
@@ -36,8 +36,8 @@ jobs:
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: Bassline
-          path: build/Bassline.dmg
+          name: Overdrive
+          path: build/Overdrive.dmg
           if-no-files-found: error
 
       - name: Publish release
@@ -46,13 +46,13 @@ jobs:
         run: |
           VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist)
           TAG="v$VERSION"
-          NOTES="Download **Bassline.dmg** below, open it, and drag Bassline into Applications.
+          NOTES="Already using Bassline or Overdrive? Open Settings › Updates › Install and Relaunch. New install: download **Overdrive.dmg** below, open it, and drag Overdrive into Applications.
 
           The first time you open it, macOS may say it can't verify the developer. Open System Settings › Privacy & Security, scroll down, and click **Open Anyway**.
 
           Built from ${GITHUB_SHA::7} on \`${GITHUB_REF_NAME}\`."
           gh release delete "$TAG" --cleanup-tag --yes 2>/dev/null || true
-          gh release create "$TAG" build/Bassline.dmg \
+          gh release create "$TAG" build/Overdrive.dmg \
             --target "$GITHUB_SHA" \
-            --title "Bassline $VERSION" \
+            --title "Overdrive $VERSION" \
             --notes "$NOTES"

@@ -1,16 +1,16 @@
 #!/bin/bash
-# Builds a universal (Apple silicon + Intel) Bassline.app into ./build.
+# Builds a universal (Apple silicon + Intel) Overdrive.app into ./build.
 # Requires macOS with Xcode 15.3 or later.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP=build/Bassline.app
+APP=build/Overdrive.app
 rm -rf build
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 swift build -c release --arch arm64 --arch x86_64
 BIN_DIR=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
-cp "$BIN_DIR/Bassline" "$APP/Contents/MacOS/Bassline"
+cp "$BIN_DIR/Overdrive" "$APP/Contents/MacOS/Overdrive"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
 # App icon: render every size macOS asks for from the 1024px master.

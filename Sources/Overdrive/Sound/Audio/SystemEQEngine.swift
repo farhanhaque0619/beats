@@ -11,7 +11,7 @@ import os
 /// first so they stay in step. Nothing is installed in the system: when the engine stops
 /// or the app quits, macOS removes the tap and audio goes straight to the device again.
 final class SystemEQEngine {
-    static let aggregateUIDPrefix = "com.bassline.eq."
+    static let aggregateUIDPrefix = "com.overdrive.sound."
 
     /// One app that gets its own tap, so it can have its own volume or skip the EQ.
     struct AppTap: Equatable {
@@ -27,7 +27,7 @@ final class SystemEQEngine {
     }
 
     let processor = EQProcessor()
-    private let logger = Logger(subsystem: "com.bassline.app", category: "engine")
+    private let logger = Logger(subsystem: "com.farhanhaque.overdrive", category: "engine")
 
     private var tapIDs: [AudioObjectID] = []
     private var tapUUIDs: [UUID] = []
@@ -116,7 +116,7 @@ final class SystemEQEngine {
     private func addTap(_ description: CATapDescription, key: String?) throws {
         let uuid = UUID()
         description.uuid = uuid
-        description.name = "Bassline EQ"
+        description.name = "Overdrive EQ"
         description.muteBehavior = .muted
         description.isPrivate = true
 
@@ -145,7 +145,7 @@ final class SystemEQEngine {
             ]
         }
         let description: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Bassline EQ",
+            kAudioAggregateDeviceNameKey: "Overdrive EQ",
             kAudioAggregateDeviceUIDKey: Self.aggregateUIDPrefix + UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey: outputs[0].uid,
             kAudioAggregateDeviceIsPrivateKey: true,

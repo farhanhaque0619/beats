@@ -36,7 +36,7 @@ struct EQPreset: Identifiable, Hashable, Codable {
     ]
 }
 
-/// The products Bassline has a tuned starting point for.
+/// The products Overdrive has a tuned starting point for.
 enum DeviceKind: String, Codable, CaseIterable {
     case beatsStudioPro
     case airPodsPro2
@@ -96,7 +96,7 @@ enum DeviceKind: String, Codable, CaseIterable {
         case .marshallActon3:
             "Acton III also has a Bass knob on top. Turn it up first, then fine-tune here. Placing it near a wall adds more low end."
         case .other:
-            "Changes apply to everything your Mac plays through this device. While the EQ is flat, Bassline doesn’t process audio at all."
+            "Changes apply to everything your Mac plays through this device. While the EQ is flat, Overdrive doesn’t process audio at all."
         }
     }
 

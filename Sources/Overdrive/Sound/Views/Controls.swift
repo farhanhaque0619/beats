@@ -172,9 +172,9 @@ struct ResponseCurveView: View {
 
             ZStack {
                 ResponseShape(vector: vector, style: .area)
-                    .fill(LinearGradient(colors: [tint.opacity(0.34), tint.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                    .fill(LinearGradient(colors: [tint.opacity(0.22), tint.opacity(0.01)], startPoint: .top, endPoint: .bottom))
                 ResponseShape(vector: vector, style: .line)
-                    .stroke(tint.opacity(0.35), style: StrokeStyle(lineWidth: compact ? 5 : 8, lineCap: .round, lineJoin: .round))
+                    .stroke(tint.opacity(0.18), style: StrokeStyle(lineWidth: compact ? 5 : 8, lineCap: .round, lineJoin: .round))
                     .blur(radius: compact ? 3 : 6)
                 ResponseShape(vector: vector, style: .line)
                     .stroke(tint, style: StrokeStyle(lineWidth: compact ? 1.75 : 2.5, lineCap: .round, lineJoin: .round))

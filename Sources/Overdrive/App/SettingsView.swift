@@ -10,6 +10,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             SoundSettings()
                 .tabItem { Label("Sound", systemImage: "slider.vertical.3") }
+            DisplaySettings()
+                .tabItem { Label("Display", systemImage: "sun.max") }
             UpdateSettings()
                 .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
             AboutSettings()
@@ -25,6 +27,8 @@ private struct GeneralSettings: View {
     @AppStorage(SettingsKey.showInDock) private var showInDock = true
     @AppStorage(SettingsKey.showMenuBarIcon) private var showMenuBarIcon = true
     @AppStorage(SettingsKey.openWindowAtLaunch) private var openWindowAtLaunch = true
+    @AppStorage(SettingsKey.accentStyle) private var accentStyle = AccentStyle.system.rawValue
+    @AppStorage(SettingsKey.menuBarStats) private var menuBarStats = false
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginItemNeedsApproval = SMAppService.mainApp.status == .requiresApproval
     @State private var loginItemError: String?
@@ -32,11 +36,11 @@ private struct GeneralSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Open Bassline at login", isOn: $launchAtLogin)
+                Toggle("Open Overdrive at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in setLaunchAtLogin(enabled) }
                 if loginItemNeedsApproval {
                     HStack {
-                        Text("Allow Bassline in Login Items to finish turning this on.")
+                        Text("Allow Overdrive in Login Items to finish turning this on.")
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
@@ -45,7 +49,7 @@ private struct GeneralSettings: View {
                 if let loginItemError {
                     Text(loginItemError).foregroundStyle(.orange)
                 }
-                Toggle("Show the window when Bassline opens", isOn: $openWindowAtLaunch)
+                Toggle("Show the window when Overdrive opens", isOn: $openWindowAtLaunch)
             } header: {
                 Text("Startup")
             } footer: {
@@ -53,6 +57,13 @@ private struct GeneralSettings: View {
             }
 
             Section {
+                Picker("Accent colour", selection: $accentStyle) {
+                    ForEach(AccentStyle.allCases) { style in
+                        Text(style.title).tag(style.rawValue)
+                    }
+                }
+                Toggle("Show CPU and temperature in the menu bar", isOn: $menuBarStats)
+                    .disabled(!showMenuBarIcon)
                 Toggle("Show in menu bar", isOn: $showMenuBarIcon)
                     .disabled(!showInDock)
                 Toggle("Show in Dock", isOn: $showInDock)
@@ -64,7 +75,7 @@ private struct GeneralSettings: View {
             } header: {
                 Text("Appearance")
             } footer: {
-                Text("Bassline keeps running in the menu bar when you close its window, so your EQ stays on. At least one of these stays on so you can always get back to it.")
+                Text("System Accent follows the colour you chose in System Settings. Overdrive keeps running in the menu bar when you close its window, so your EQ and display settings stay on. The menu bar or the Dock always stays on so you can get back to it.")
             }
         }
         .formStyle(.grouped)
@@ -91,7 +102,7 @@ private struct GeneralSettings: View {
 // MARK: - Sound
 
 private struct SoundSettings: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @AppStorage(SettingsKey.limiter) private var limiterEnabled = true
     @AppStorage(SettingsKey.showSpectrum) private var showSpectrum = true
     @AppStorage(SettingsKey.dismissedPermissionNote) private var dismissedPermissionNote = false
@@ -112,7 +123,7 @@ private struct SoundSettings: View {
             } header: {
                 Text("Processing")
             } footer: {
-                Text("Bassline only processes audio when the current device’s EQ is on and not flat. Otherwise sound goes straight to the device.")
+                Text("Overdrive only processes audio when the current device’s EQ is on and not flat. Otherwise sound goes straight to the device.")
             }
 
             Section("Devices") {
@@ -147,6 +158,36 @@ private struct SoundSettings: View {
     }
 }
 
+// MARK: - Display
+
+private struct DisplaySettings: View {
+    @EnvironmentObject private var displays: DisplayManager
+    @AppStorage(SettingsKey.boostBatteryFloor) private var batteryFloor = 20
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Pause on battery below", selection: $batteryFloor) {
+                    Text("10%").tag(10)
+                    Text("20%").tag(20)
+                    Text("30%").tag(30)
+                    Text("50%").tag(50)
+                    Text("Never").tag(0)
+                }
+                LabeledContent("Maximum boost", value: "+\(Int(((DisplayManager.maxBoostFactor - 1) * 100).rounded()))%")
+                LabeledContent("Status", value: displays.canBoost
+                    ? (displays.boostEnabled ? (displays.boostPausedReason ?? "On") : "Off")
+                    : "This Mac’s displays don’t have HDR headroom")
+            } header: {
+                Text("Extra Brightness")
+            } footer: {
+                Text("Extra Brightness always pauses when macOS reports your Mac is running hot, and turns off the moment Overdrive quits. It uses more power, so it can also pause when the battery runs low.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
 // MARK: - Updates
 
 private struct UpdateSettings: View {
@@ -162,7 +203,7 @@ private struct UpdateSettings: View {
                     Text(updater.lastChecked.map { $0.formatted(.relative(presentation: .named)) } ?? "Never")
                 }
             } footer: {
-                Text("Bassline checks its GitHub releases once a day.")
+                Text("Overdrive checks its GitHub releases once a day.")
             }
 
             Section {
@@ -184,7 +225,7 @@ private struct UpdateSettings: View {
                 Text("Checking for updates…")
             }
         case .upToDate:
-            checkRow(message: "Bassline is up to date.", symbol: "checkmark.circle.fill", color: .green)
+            checkRow(message: "Overdrive is up to date.", symbol: "checkmark.circle.fill", color: .green)
         case .failed(let message):
             VStack(alignment: .leading, spacing: 8) {
                 checkRow(message: message, symbol: "exclamationmark.triangle.fill", color: .orange)
@@ -192,7 +233,7 @@ private struct UpdateSettings: View {
             }
         case .available(let release):
             VStack(alignment: .leading, spacing: 10) {
-                Label("Bassline \(release.version) is available", systemImage: "arrow.down.circle.fill")
+                Label("Overdrive \(release.version) is available", systemImage: "arrow.down.circle.fill")
                     .font(.headline)
                     .foregroundStyle(.tint)
                 if !release.notes.isEmpty {
@@ -212,7 +253,7 @@ private struct UpdateSettings: View {
         case .installing(let release):
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text("Installing Bassline \(release.version). It will reopen by itself.")
+                Text("Installing Overdrive \(release.version). It will reopen by itself.")
             }
         }
     }
@@ -232,7 +273,7 @@ private struct UpdateSettings: View {
 // MARK: - About and performance
 
 private struct AboutSettings: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var updater: UpdateChecker
     @StateObject private var sampler = PerformanceSampler()
 
@@ -244,7 +285,7 @@ private struct AboutSettings: View {
                         .resizable()
                         .frame(width: 64, height: 64)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Bassline").font(.title2.weight(.semibold))
+                        Text("Overdrive").font(.title2.weight(.semibold))
                         Text("Version \(updater.currentVersion)").foregroundStyle(.secondary)
                         Link("View on GitHub", destination: UpdateChecker.repositoryURL)
                     }
@@ -254,7 +295,7 @@ private struct AboutSettings: View {
 
             Section {
                 LabeledContent("Status", value: model.engine.isRunning ? "Equalizing" : "Idle, not processing audio")
-                LabeledContent("Bassline CPU use", value: String(format: "%.1f%%", sampler.cpuPercent))
+                LabeledContent("Overdrive CPU use", value: String(format: "%.1f%%", sampler.cpuPercent))
                 LabeledContent("EQ processing", value: model.engine.isRunning
                     ? String(format: "%.2f%% of the audio time budget", model.engine.processor.processingLoad * 100)
                     : "Off")

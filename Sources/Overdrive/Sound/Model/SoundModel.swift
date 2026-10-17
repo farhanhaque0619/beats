@@ -24,10 +24,16 @@ enum SettingsKey {
     static let userPresets = "userPresets.v1"
     static let appRules = "appRules.v1"
     static let outputRoles = "outputRoles"
+    static let accentStyle = "accentStyle"
+    static let menuBarStats = "menuBarStats"
+    static let boostLevel = "displayBoostLevel"
+    static let boostEnabled = "displayBoostEnabled"
+    static let boostBatteryFloor = "displayBoostBatteryFloor"
+    static let keepAwakeAllowsDisplaySleep = "keepAwakeAllowsDisplaySleep"
 }
 
 @MainActor
-final class AppModel: ObservableObject {
+final class SoundModel: ObservableObject {
     /// Sidebar selection for the Multi-Output page.
     static let groupSelectionID = "multi-output"
     /// Sidebar selection for the App Sound page.
@@ -85,7 +91,7 @@ final class AppModel: ObservableObject {
            let presets = try? JSONDecoder().decode([EQPreset].self, from: data) {
             userPresets = presets
         }
-        selectedProfileID = profiles.first?.id
+        selectedProfileID = Page.overview
 
         HAL.observeSystem(kAudioHardwarePropertyDefaultOutputDevice) { [weak self] in
             Task { @MainActor in self?.outputDidChange() }
@@ -103,7 +109,6 @@ final class AppModel: ObservableObject {
         }
 
         outputDidChange()
-        if let active = activeProfile { selectedProfileID = active.id }
     }
 
     // MARK: - Queries
@@ -249,8 +254,7 @@ final class AppModel: ObservableObject {
     /// Removes settings for devices that aren't connected (the three tuned devices stay).
     func forgetDisconnectedDevices() {
         profiles.removeAll { $0.kind == .other && !isConnected($0) && !isCurrentOutput($0) }
-        if selectedProfileID != Self.groupSelectionID, selectedProfileID != Self.appsSelectionID,
-           profile(id: selectedProfileID) == nil {
+        if let selected = selectedProfileID, !Page.all.contains(selected), profile(id: selected) == nil {
             selectedProfileID = activeProfile?.id ?? profiles.first?.id
         }
         scheduleSave()

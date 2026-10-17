@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct MenuBarPanel: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var updater: UpdateChecker
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -18,36 +18,40 @@ struct MenuBarPanel: View {
 
             OutputPicker()
 
+            Divider()
+
+            QuickControls()
+
             if let release = updater.availableRelease {
                 Button {
                     showSettings()
                 } label: {
-                    Label("Bassline \(release.version) is available", systemImage: "arrow.down.circle.fill")
+                    Label("Overdrive \(release.version) is available", systemImage: "arrow.down.circle.fill")
                         .font(.callout.weight(.medium))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                 }
                 .buttonStyle(.plain)
-                .glassSurface(cornerRadius: 10, tint: .accentColor, interactive: true)
+                .glassSurface(cornerRadius: 10, tint: Theme.accent, interactive: true)
             }
 
             Divider()
 
             VStack(alignment: .leading, spacing: 2) {
-                PanelButton(title: "Open Bassline", symbol: "macwindow") {
-                    if let id = model.activeProfile?.id { model.selectedProfileID = id }
+                PanelButton(title: "Open Overdrive", symbol: "macwindow") {
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 PanelButton(title: "Settings…", symbol: "gearshape", action: showSettings)
-                PanelButton(title: "Quit Bassline", symbol: "power") {
+                PanelButton(title: "Quit Overdrive", symbol: "power") {
                     NSApp.terminate(nil)
                 }
             }
         }
         .padding(16)
-        .frame(width: 320)
+        .frame(width: 340)
+        .tint(Theme.accent)
     }
 
     private func showSettings() {
@@ -56,8 +60,79 @@ struct MenuBarPanel: View {
     }
 }
 
+/// Brightness, Keep Awake and the microphone, plus a one-line system readout.
+private struct QuickControls: View {
+    @EnvironmentObject private var displays: DisplayManager
+    @EnvironmentObject private var tools: ToolsManager
+    @EnvironmentObject private var monitor: SystemMonitor
+
+    var body: some View {
+        let s = monitor.snapshot
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                if displays.canBoost {
+                    QuickToggle(title: "Brighter", symbol: "sun.max.fill", isOn: displays.isBoostActive) {
+                        withAnimation(.smooth) { displays.setBoostEnabled(!displays.boostEnabled) }
+                    }
+                }
+                QuickToggle(title: "Awake", symbol: "cup.and.saucer.fill", isOn: tools.isKeepingAwake) {
+                    withAnimation(.smooth) {
+                        if tools.isKeepingAwake { tools.stopKeepingAwake() } else { tools.keepAwake(minutes: nil) }
+                    }
+                }
+                if tools.hasMicrophone {
+                    QuickToggle(title: tools.isMicMuted ? "Mic Off" : "Mic On", symbol: tools.isMicMuted ? "mic.slash.fill" : "mic.fill", isOn: tools.isMicMuted) {
+                        withAnimation(.smooth) { tools.setMicMuted(!tools.isMicMuted) }
+                    }
+                }
+            }
+            HStack(spacing: 14) {
+                Label(Format.percent(s.cpu), systemImage: "cpu")
+                Label(Format.percent(s.memoryFraction), systemImage: "memorychip")
+                if let temperature = s.cpuTemperature {
+                    Label(Format.temperature(temperature), systemImage: "thermometer.medium")
+                }
+                if let fan = s.fans.first, fan.rpm > 0 {
+                    Label("\(Int(fan.rpm.rounded()))", systemImage: "fan")
+                }
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+        }
+        .onAppear { monitor.start("menubar-panel") }
+        .onDisappear { monitor.stop("menubar-panel") }
+    }
+}
+
+private struct QuickToggle: View {
+    let title: String
+    let symbol: String
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(isOn ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(isOn ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.08))))
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(.smooth(duration: 0.2), value: isOn)
+    }
+}
+
 private struct ActiveDeviceSection: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var battery: BatteryMonitor
     let profile: DeviceProfile
 
@@ -129,7 +204,7 @@ private struct ActiveDeviceSection: View {
 /// Lists every output, like the Sound menu in Control Center. Clicking a name makes it the
 /// sound output; the circle on the right adds it to Multi-Output.
 private struct OutputPicker: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var battery: BatteryMonitor
 
     var body: some View {

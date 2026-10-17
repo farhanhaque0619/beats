@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 struct ContentView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @Environment(\.openSettings) private var openSettings
+    @AppStorage(SettingsKey.accentStyle) private var accentStyle = AccentStyle.system.rawValue
 
     var body: some View {
         NavigationSplitView {
@@ -11,37 +12,18 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 230, ideal: 260, max: 320)
         } detail: {
             ZStack {
-                AmbientBackground(tint: backgroundTint)
-
-                if model.selectedProfileID == AppModel.appsSelectionID {
-                    AppsView()
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
-                            removal: .opacity
-                        ))
-                } else if model.selectedProfileID == AppModel.groupSelectionID {
-                    GroupView()
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
-                            removal: .opacity
-                        ))
-                } else if let id = model.selectedProfileID, model.profile(id: id) != nil {
-                    ProfileDetailView(profileID: id)
-                        .id(id)
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
-                            removal: .opacity
-                        ))
-                } else {
-                    ContentUnavailableView(
-                        "Choose a Device",
-                        systemImage: "headphones",
-                        description: Text("Pick headphones or a speaker to shape how it sounds.")
-                    )
-                }
+                AmbientBackground(tint: Theme.accent)
+                detail
+                    .id(model.selectedProfileID)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
+                        removal: .opacity
+                    ))
             }
             .animation(.smooth(duration: 0.35), value: model.selectedProfileID)
         }
+        .tint(Theme.accent)
+        .id(accentStyle)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -53,43 +35,66 @@ struct ContentView: View {
             }
         }
     }
-}
 
-extension ContentView {
-    private var backgroundTint: Color {
-        if model.selectedProfileID == AppModel.groupSelectionID { return .multiOutput }
-        if model.selectedProfileID == AppModel.appsSelectionID { return .appSound }
-        return model.profile(id: model.selectedProfileID)?.tint ?? DeviceKind.other.tint
+    @ViewBuilder
+    private var detail: some View {
+        switch model.selectedProfileID {
+        case .some(Page.overview): OverviewView()
+        case .some(Page.display): DisplayView()
+        case .some(Page.performance): PerformanceView()
+        case .some(Page.tools): ToolsView()
+        case .some(SoundModel.appsSelectionID): AppsView()
+        case .some(SoundModel.groupSelectionID): GroupView()
+        case let id? where model.profile(id: id) != nil: ProfileDetailView(profileID: id)
+        default:
+            ContentUnavailableView(
+                "Choose Something",
+                systemImage: "sidebar.left",
+                description: Text("Pick a section in the sidebar.")
+            )
+        }
     }
 }
 
 private struct Sidebar: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
+    @EnvironmentObject private var displays: DisplayManager
+    @EnvironmentObject private var tools: ToolsManager
+    @AppStorage("sidebarSoundExpanded") private var soundExpanded = true
+    @AppStorage("sidebarSavedExpanded") private var savedExpanded = false
 
     var body: some View {
         List(selection: $model.selectedProfileID) {
             Section {
-                MultiOutputRow().tag(AppModel.groupSelectionID)
-                AppSoundRow().tag(AppModel.appsSelectionID)
+                NavRow(title: "Overview", symbol: "square.grid.2x2", subtitle: "Everything at a glance").tag(Page.overview)
             }
-            Section("My Devices") {
+            Section(isExpanded: $soundExpanded) {
+                MultiOutputRow().tag(SoundModel.groupSelectionID)
+                AppSoundRow().tag(SoundModel.appsSelectionID)
                 ForEach(model.knownProfiles) { profile in
                     DeviceRow(profile: profile).tag(profile.id)
                 }
-            }
-            if !model.connectedOtherProfiles.isEmpty {
-                Section("Connected") {
-                    ForEach(model.connectedOtherProfiles) { profile in
-                        DeviceRow(profile: profile).tag(profile.id)
-                    }
+                ForEach(model.connectedOtherProfiles) { profile in
+                    DeviceRow(profile: profile).tag(profile.id)
                 }
+            } header: {
+                Text("Sound")
             }
             if !model.savedOtherProfiles.isEmpty {
-                Section("Saved") {
+                Section(isExpanded: $savedExpanded) {
                     ForEach(model.savedOtherProfiles) { profile in
                         DeviceRow(profile: profile).tag(profile.id)
                     }
+                } header: {
+                    Text("Saved Sound Devices")
                 }
+            }
+            Section("Display") {
+                NavRow(title: "Displays", symbol: "sun.max", subtitle: displaySubtitle).tag(Page.display)
+            }
+            Section("System") {
+                NavRow(title: "Performance", symbol: "gauge.with.dots.needle.50percent", subtitle: "CPU, memory, heat, battery").tag(Page.performance)
+                NavRow(title: "Tools", symbol: "wrench.and.screwdriver", subtitle: tools.isKeepingAwake ? "Keeping your Mac awake" : "Keep awake, Finder, quick fixes").tag(Page.tools)
             }
         }
         .listStyle(.sidebar)
@@ -99,10 +104,37 @@ private struct Sidebar: View {
                 .padding(10)
         }
     }
+
+    private var displaySubtitle: String {
+        guard displays.canBoost else { return "Brightness and resolution" }
+        if displays.isBoostActive { return "Extra Brightness on" }
+        return "Extra Brightness off"
+    }
+}
+
+private struct NavRow: View {
+    let title: String
+    let symbol: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            DeviceBadge(symbol: symbol, size: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 3)
+    }
 }
 
 private struct MultiOutputRow: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
 
     var body: some View {
         HStack(spacing: 10) {
@@ -128,7 +160,7 @@ private struct MultiOutputRow: View {
 }
 
 private struct AppSoundRow: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
 
     var body: some View {
         let customised = model.appRules.values.filter { !$0.isDefault }.count
@@ -147,7 +179,7 @@ private struct AppSoundRow: View {
 }
 
 private struct DeviceRow: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var battery: BatteryMonitor
     let profile: DeviceProfile
 
@@ -223,7 +255,7 @@ private struct DeviceRow: View {
 }
 
 private struct EngineFooter: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var model: SoundModel
 
     var body: some View {
         HStack(spacing: 10) {
@@ -259,7 +291,7 @@ private struct EngineFooter: View {
     private var title: String {
         switch model.engineStatus {
         case .running: "Equalizer on"
-        case .idle: "Not processing"
+        case .idle: "Equalizer idle"
         case .failed: "Equalizer stopped"
         case .unsupported: "Unavailable"
         }

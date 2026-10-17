@@ -63,6 +63,9 @@ struct SystemSnapshot: Equatable {
     var swapUsed: UInt64 = 0
     var pressure: MemoryPressure = .normal
     var cpuTemperature: Double?
+    var performanceCoreTemperature: Double?
+    var efficiencyCoreTemperature: Double?
+    var hottestCoreTemperature: Double?
     var gpuTemperature: Double?
     var fans: [FanReading] = []
     var hasFans = true
@@ -200,8 +203,8 @@ private final class Sampler {
     private var previousDisk: (read: UInt64, write: UInt64, time: TimeInterval)?
     private var previousProcesses: [pid_t: UInt64] = [:]
     private var previousProcessTime: TimeInterval = 0
-    private var cpuKeys: [String]?
-    private var gpuKeys: [String]?
+    /// The temperature keys this Mac actually has, found on the first sample.
+    private var temperatureKeys: TemperatureKeys?
     private let ticksToSeconds: Double = {
         var timebase = mach_timebase_info_data_t()
         mach_timebase_info(&timebase)
@@ -323,10 +326,17 @@ private final class Sampler {
     private func readSensors(into snapshot: inout SystemSnapshot) {
         let smc = SMC.shared
         if smc.isAvailable {
-            if cpuKeys == nil { cpuKeys = SMCKeys.cpu.filter { Self.plausible(smc.value($0)) } }
-            if gpuKeys == nil { gpuKeys = SMCKeys.gpu.filter { Self.plausible(smc.value($0)) } }
-            snapshot.cpuTemperature = Self.average(cpuKeys?.compactMap { smc.value($0) }.filter { Self.plausible($0) })
-            snapshot.gpuTemperature = Self.average(gpuKeys?.compactMap { smc.value($0) }.filter { Self.plausible($0) })
+            let keys = resolvedTemperatureKeys(smc)
+            func readings(_ list: [String]) -> [Double] {
+                list.compactMap { smc.value($0) }.filter { Self.plausible($0) }
+            }
+            let performance = readings(keys.performanceCores)
+            let efficiency = readings(keys.efficiencyCores)
+            snapshot.performanceCoreTemperature = Self.average(performance)
+            snapshot.efficiencyCoreTemperature = Self.average(efficiency)
+            snapshot.cpuTemperature = Self.average(performance + efficiency)
+            snapshot.hottestCoreTemperature = (performance + efficiency).max()
+            snapshot.gpuTemperature = Self.average(readings(keys.gpu))
             if let power = smc.value(SMCKeys.systemPower), power > 0.1, power < 500 { snapshot.systemPower = power }
 
             let fanCount = Int(smc.value(SMCKeys.fanCount) ?? 0)
@@ -344,6 +354,23 @@ private final class Sampler {
         if snapshot.cpuTemperature == nil {
             snapshot.cpuTemperature = HIDSensors.shared.chipTemperature()
         }
+    }
+
+    /// Keeps only the keys that answer with a real temperature on this Mac.
+    private func resolvedTemperatureKeys(_ smc: SMC) -> TemperatureKeys {
+        if let temperatureKeys { return temperatureKeys }
+        func present(_ list: [String]) -> [String] { list.filter { Self.plausible(smc.value($0)) } }
+        func resolve(_ keys: TemperatureKeys) -> TemperatureKeys {
+            TemperatureKeys(
+                performanceCores: present(keys.performanceCores),
+                efficiencyCores: present(keys.efficiencyCores),
+                gpu: present(keys.gpu)
+            )
+        }
+        var keys = TemperatureKeys.forChip(ChipFamily.current).map(resolve) ?? resolve(.fallback)
+        if keys.cpu.isEmpty { keys = resolve(.fallback) }
+        temperatureKeys = keys
+        return keys
     }
 
     private static func plausible(_ value: Double?) -> Bool {

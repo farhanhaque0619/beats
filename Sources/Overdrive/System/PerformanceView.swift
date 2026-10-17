@@ -117,7 +117,10 @@ struct PerformanceView: View {
     private func thermalCard(_ s: SystemSnapshot) -> some View {
         Card(title: "Temperatures & Fans", symbol: "thermometer.medium") {
             HStack(spacing: 24) {
-                StatValue(title: "CPU", value: Format.temperature(s.cpuTemperature))
+                StatValue(title: "CPU", value: Format.temperature(s.cpuTemperature), detail: s.hottestCoreTemperature.map { "hottest core \(Format.temperature($0))" })
+                if let performance = s.performanceCoreTemperature, let efficiency = s.efficiencyCoreTemperature {
+                    StatValue(title: "P / E cores", value: "\(Format.temperature(performance)) / \(Format.temperature(efficiency))")
+                }
                 StatValue(title: "GPU", value: Format.temperature(s.gpuTemperature))
                 if let battery = s.battery?.temperature {
                     StatValue(title: "Battery", value: Format.temperature(battery))
@@ -139,7 +142,7 @@ struct PerformanceView: View {
                     HStack(spacing: 10) {
                         Image(systemName: "fan")
                             .foregroundStyle(.secondary)
-                        Text(s.fans.count > 1 ? (fan.id == 0 ? "Left fan" : "Right fan") : "Fan")
+                        Text(s.fans.count > 1 ? "Fan \(fan.id + 1)" : "Fan")
                             .frame(width: 70, alignment: .leading)
                         MeterBar(value: fan.fraction)
                         Text("\(Int(fan.rpm.rounded())) rpm")

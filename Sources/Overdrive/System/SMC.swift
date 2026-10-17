@@ -123,36 +123,82 @@ final class SMC {
     }
 }
 
-/// SMC keys for CPU and GPU temperatures, by chip generation. A Mac only has some of them;
-/// the rest come back empty and are skipped.
+/// The Mac's chip family, which decides which SMC temperature keys mean what.
+enum ChipFamily: Equatable {
+    case appleSilicon(generation: Int)
+    case intel
+
+    static let current: ChipFamily = {
+        let brand = Sysctl.string("machdep.cpu.brand_string") ?? ""
+        if brand.localizedCaseInsensitiveContains("intel") { return .intel }
+        // "Apple M3 Pro" → 3
+        if let range = brand.range(of: #"M(\d+)"#, options: .regularExpression),
+           let generation = Int(brand[range].dropFirst()) {
+            return .appleSilicon(generation: generation)
+        }
+        return .appleSilicon(generation: 0)
+    }()
+}
+
+/// SMC temperature keys for one chip generation. Each generation uses its own names, and a
+/// key from one generation can mean something else on another, so only the matching set is
+/// read.
+struct TemperatureKeys {
+    let performanceCores: [String]
+    let efficiencyCores: [String]
+    let gpu: [String]
+
+    var cpu: [String] { performanceCores + efficiencyCores }
+
+    static let m1 = TemperatureKeys(
+        performanceCores: ["Tp01", "Tp05", "Tp0D", "Tp0H", "Tp0L", "Tp0P", "Tp0X", "Tp0b"],
+        efficiencyCores: ["Tp09", "Tp0T"],
+        gpu: ["Tg05", "Tg0D", "Tg0L", "Tg0T"]
+    )
+    static let m2 = TemperatureKeys(
+        performanceCores: ["Tp01", "Tp05", "Tp09", "Tp0D", "Tp0X", "Tp0b", "Tp0f", "Tp0j"],
+        efficiencyCores: ["Tp1h", "Tp1t", "Tp1p", "Tp1l"],
+        gpu: ["Tg0f", "Tg0j"]
+    )
+    static let m3 = TemperatureKeys(
+        performanceCores: ["Tf04", "Tf09", "Tf0A", "Tf0B", "Tf0D", "Tf0E", "Tf44", "Tf49", "Tf4A", "Tf4B", "Tf4D", "Tf4E"],
+        efficiencyCores: ["Te05", "Te0L", "Te0P", "Te0S"],
+        gpu: ["Tf14", "Tf18", "Tf19", "Tf1A", "Tf24", "Tf28", "Tf29", "Tf2A"]
+    )
+    static let m4 = TemperatureKeys(
+        performanceCores: ["Tp01", "Tp05", "Tp09", "Tp0D", "Tp0V", "Tp0Y", "Tp0b", "Tp0e"],
+        efficiencyCores: ["Te05", "Te0S", "Te09", "Te0H"],
+        gpu: ["Tg0G", "Tg0H", "Tg1U", "Tg1k", "Tg0K", "Tg0L", "Tg0d", "Tg0e", "Tg0j", "Tg0k"]
+    )
+    static let intel = TemperatureKeys(
+        performanceCores: ["TC0P", "TC0D", "TC0E", "TC0F", "TC1C", "TC2C", "TC3C", "TC4C"],
+        efficiencyCores: [],
+        gpu: ["TG0P", "TG0D", "TCGC"]
+    )
+
+    static func forChip(_ family: ChipFamily) -> TemperatureKeys? {
+        switch family {
+        case .intel: return .intel
+        case .appleSilicon(let generation):
+            switch generation {
+            case 1: return .m1
+            case 2: return .m2
+            case 3: return .m3
+            case 4: return .m4
+            default: return nil
+            }
+        }
+    }
+
+    /// For chips newer than this list: the most recent generations' keys, newest first.
+    static let fallback = TemperatureKeys(
+        performanceCores: m4.performanceCores + m3.performanceCores,
+        efficiencyCores: m4.efficiencyCores + m3.efficiencyCores,
+        gpu: m4.gpu + m3.gpu
+    )
+}
+
 enum SMCKeys {
-    static let cpu: [String] = [
-        // M1
-        "Tp01", "Tp05", "Tp09", "Tp0D", "Tp0H", "Tp0L", "Tp0P", "Tp0T", "Tp0X", "Tp0b",
-        // M2
-        "Tp0f", "Tp0j", "Tp1h", "Tp1t", "Tp1p", "Tp1l",
-        // M3
-        "Te05", "Te0L", "Te0P", "Te0S", "Tf04", "Tf09", "Tf0A", "Tf0B", "Tf0D", "Tf0E",
-        "Tf44", "Tf49", "Tf4A", "Tf4B", "Tf4D", "Tf4E",
-        // M4
-        "Te09", "Te0H", "Tp0V", "Tp0Y", "Tp0e",
-        // Intel
-        "TC0P", "TC0D", "TC0E", "TC0F", "TC1C", "TC2C", "TC3C", "TC4C",
-    ]
-
-    static let gpu: [String] = [
-        // M1
-        "Tg05", "Tg0D", "Tg0L", "Tg0T",
-        // M2
-        "Tg0f", "Tg0j",
-        // M3
-        "Tf14", "Tf18", "Tf19", "Tf1A", "Tf24", "Tf28", "Tf29", "Tf2A",
-        // M4
-        "Tg0G", "Tg0H", "Tg1U", "Tg1k", "Tg0K", "Tg0d", "Tg0e", "Tg0k",
-        // Intel
-        "TG0P", "TG0D", "TCGC",
-    ]
-
     static let systemPower = "PSTR"
     static let fanCount = "FNum"
     static func fanActual(_ index: Int) -> String { "F\(index)Ac" }

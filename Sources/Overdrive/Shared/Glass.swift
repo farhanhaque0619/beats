@@ -181,16 +181,19 @@ struct PresetChip: View {
     let title: String
     let isSelected: Bool
     let tint: Color
+    var compact = false
     let action: () -> Void
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.callout.weight(isSelected ? .semibold : .regular))
+                .font((compact ? Font.caption : Font.callout).weight(isSelected ? .semibold : .regular))
                 .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, compact ? 10 : 14)
+                .padding(.vertical, compact ? 5 : 7)
                 .background {
                     if isSelected {
                         Capsule()

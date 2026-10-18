@@ -41,7 +41,7 @@ struct OverviewView: View {
                 HStack(spacing: 12) {
                     DeviceBadge(symbol: profile.symbolName, size: 40)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(sound.isGroupActive ? "\(sound.activeGroup.count) devices" : profile.displayName)
+                        Text(sound.isGroupActive ? "\(sound.activeGroup.count) devices" : (sound.currentOutput?.name ?? profile.displayName))
                             .font(.headline)
                             .lineLimit(1)
                         HStack(spacing: 8) {

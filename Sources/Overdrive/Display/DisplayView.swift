@@ -148,8 +148,9 @@ private struct DisplayCard: View {
                             if displays.setMode(option, for: display) { currentMode = id }
                         }
                     )) {
+                        let markLowResolution = modes.contains(where: \.isHiDPI)
                         ForEach(modes) { mode in
-                            Text(mode.title).tag(mode.id)
+                            Text(mode.title(markLowResolution: markLowResolution)).tag(mode.id)
                         }
                     }
                     .labelsHidden()

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Page structure
@@ -207,7 +208,24 @@ enum Format {
     }
 
     static func rate(_ bytesPerSecond: Double) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytesPerSecond), countStyle: .file) + "/s"
+        let kb = bytesPerSecond / 1_000
+        if kb < 1_000 { return "\(Int(kb.rounded())) KB/s" }
+        let mb = kb / 1_000
+        if mb < 1_000 { return String(format: mb < 10 ? "%.1f MB/s" : "%.0f MB/s", mb) }
+        return String(format: "%.2f GB/s", mb / 1_000)
+    }
+
+    static func uptime(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        let days = minutes / 1_440
+        let hours = (minutes % 1_440) / 60
+        if days > 0 { return "\(days) day\(days == 1 ? "" : "s") \(hours) h" }
+        if hours > 0 { return "\(hours) h \(minutes % 60) min" }
+        return "\(minutes) min"
+    }
+
+    static func watts(_ value: Double) -> String {
+        String(format: value < 10 ? "%.1f W" : "%.0f W", value)
     }
 
     static func temperature(_ celsius: Double?) -> String {
@@ -219,5 +237,78 @@ enum Format {
         let hours = minutes / 60
         let remainder = minutes % 60
         return hours > 0 ? "\(hours) h \(remainder) min" : "\(remainder) min"
+    }
+}
+
+// MARK: - Icons
+
+/// App icons, loaded once per app instead of on every redraw.
+enum IconCache {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    static func icon(forFile path: String) -> NSImage {
+        if let cached = cache.object(forKey: path as NSString) { return cached }
+        let image = NSWorkspace.shared.icon(forFile: path)
+        image.size = NSSize(width: 32, height: 32)
+        cache.setObject(image, forKey: path as NSString)
+        return image
+    }
+}
+
+// MARK: - Layout
+
+/// Lays views out left to right and wraps onto new rows, like words in a paragraph.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var widest: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            widest = max(widest, x - spacing)
+        }
+        return CGSize(width: min(widest, maxWidth), height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+/// A short explanation under a number or a section.
+struct Explainer: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

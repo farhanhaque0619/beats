@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 
+/// The menu bar dropdown: sound, a live system readout and one-click actions.
 struct MenuBarPanel: View {
     @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var updater: UpdateChecker
@@ -8,9 +9,9 @@ struct MenuBarPanel: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             if let profile = model.activeProfile {
-                ActiveDeviceSection(profile: profile)
+                SoundSection(profile: profile)
             } else {
                 Label("No sound output found", systemImage: "speaker.slash")
                     .foregroundStyle(.secondary)
@@ -19,13 +20,12 @@ struct MenuBarPanel: View {
             OutputPicker()
 
             Divider()
-
-            QuickControls()
+            SystemSection()
+            Divider()
+            QuickActions()
 
             if let release = updater.availableRelease {
-                Button {
-                    showSettings()
-                } label: {
+                Button(action: showSettings) {
                     Label("Overdrive \(release.version) is available", systemImage: "arrow.down.circle.fill")
                         .font(.callout.weight(.medium))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -38,18 +38,16 @@ struct MenuBarPanel: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
                 PanelButton(title: "Open Overdrive", symbol: "macwindow") {
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
                 }
-                PanelButton(title: "Settings…", symbol: "gearshape", action: showSettings)
-                PanelButton(title: "Quit Overdrive", symbol: "power") {
-                    NSApp.terminate(nil)
-                }
+                PanelIconButton(symbol: "gearshape", help: "Settings", action: showSettings)
+                PanelIconButton(symbol: "power", help: "Quit Overdrive") { NSApp.terminate(nil) }
             }
         }
-        .padding(16)
+        .padding(14)
         .frame(width: 340)
         .tint(Theme.accent)
     }
@@ -60,16 +58,252 @@ struct MenuBarPanel: View {
     }
 }
 
-/// Brightness, Keep Awake and the microphone, plus a one-line system readout.
-private struct QuickControls: View {
-    @EnvironmentObject private var displays: DisplayManager
-    @EnvironmentObject private var tools: ToolsManager
+// MARK: - Sound
+
+private struct SoundSection: View {
+    @EnvironmentObject private var model: SoundModel
+    @EnvironmentObject private var battery: BatteryMonitor
+    let profile: DeviceProfile
+
+    var body: some View {
+        let status = model.status(of: profile)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                DeviceBadge(symbol: profile.symbolName, size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    HStack(spacing: 5) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 6))
+                            .foregroundStyle(status.color)
+                        Text(status.title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                Toggle("Equalizer", isOn: model.binding(profile.id, \.isEnabled, fallback: false, animation: .smooth(duration: 0.3)))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+
+            if let info = battery.battery(for: model.currentOutput?.name) {
+                BatteryLabel(info: info, showCase: true)
+                    .font(.caption)
+                    .padding(.leading, 44)
+            }
+
+            FlowLayout(spacing: 6) {
+                ForEach(model.presets(for: profile)) { preset in
+                    PresetChip(title: preset.name, isSelected: preset.name == profile.presetName, tint: Theme.accent, compact: true) {
+                        withAnimation(.smooth(duration: 0.4)) { model.apply(preset, to: profile.id) }
+                    }
+                }
+            }
+            .disabled(!profile.isEnabled)
+
+            HStack(spacing: 8) {
+                Text("Bass Boost")
+                    .font(.callout)
+                Slider(value: model.binding(profile.id, \.bassBoost, fallback: 0), in: EQBands.bassBoostRange, step: 0.5) {
+                    Text("Bass Boost")
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                Text(profile.bassBoost < 0.05 ? "Off" : String(format: "+%.0f dB", profile.bassBoost))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, alignment: .trailing)
+            }
+            .disabled(!profile.isEnabled)
+        }
+        .animation(.smooth(duration: 0.3), value: status)
+    }
+
+    /// The real device name (or the group), not the product template's name.
+    private var title: String {
+        if model.isGroupActive { return "\(model.activeGroup.count) devices" }
+        return model.currentOutput?.name ?? profile.displayName
+    }
+}
+
+/// Lists every output, like the Sound menu in Control Center. Clicking a name makes it the
+/// sound output; the circle on the right adds it to Multi-Output.
+private struct OutputPicker: View {
+    @EnvironmentObject private var model: SoundModel
+    @EnvironmentObject private var battery: BatteryMonitor
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                SectionLabel("Output")
+                Spacer()
+                if model.isGroupActive {
+                    Text("Playing on \(model.activeGroup.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            ForEach(model.connectedDevices) { device in
+                OutputRow(device: device)
+            }
+        }
+        .animation(.smooth(duration: 0.3), value: model.isGroupActive)
+    }
+}
+
+private struct OutputRow: View {
+    @EnvironmentObject private var model: SoundModel
+    @EnvironmentObject private var battery: BatteryMonitor
+    let device: OutputDevice
+
+    var body: some View {
+        let profile = model.profile(for: device)
+        let isCurrent = device.uid == model.currentOutput?.uid
+        let isMember = model.isInGroup(device)
+        HStack(spacing: 0) {
+            Button {
+                model.playThrough(device)
+            } label: {
+                HStack(spacing: 8) {
+                    DeviceBadge(symbol: profile?.symbolName ?? "speaker.wave.2.fill", size: 22, dimmed: !isMember)
+                    Text(device.name)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    if let level = battery.battery(for: device.name)?.headline {
+                        Text("\(level)%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(BatteryLabel.color(level))
+                            .fixedSize()
+                    }
+                    if let profile, !profile.isFlat, profile.isEnabled {
+                        Text("EQ")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Theme.accent)
+                            .fixedSize()
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(HoverRowStyle())
+            .help(isCurrent ? "Sound output" : "Make this the sound output")
+
+            Button {
+                withAnimation(.smooth(duration: 0.3)) { model.toggleGroupMember(device) }
+            } label: {
+                Image(systemName: isMember ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 16))
+                    .foregroundStyle(isMember ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.tertiary))
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isCurrent || !model.canAddToGroup(device))
+            .help(isCurrent ? "The sound output always plays" : (isMember ? "Stop playing here" : "Also play here at the same time"))
+        }
+    }
+}
+
+// MARK: - System
+
+/// A compact, readable readout of the Mac's vital signs.
+private struct SystemSection: View {
     @EnvironmentObject private var monitor: SystemMonitor
+    @EnvironmentObject private var model: SoundModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let s = monitor.snapshot
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                SectionLabel("System")
+                Spacer()
+                Button("Details") { model.selectedProfileID = Page.performance; openMain() }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+                MiniStat(title: "CPU", value: Format.percent(s.cpu), fraction: s.cpu)
+                MiniStat(title: "GPU", value: s.gpu.map(Format.percent) ?? "—", fraction: s.gpu)
+                MiniStat(title: "Memory", value: Format.percent(s.memoryFraction), fraction: s.memoryFraction, warning: s.pressure != .normal)
+                MiniStat(title: "CPU Temp", value: Format.temperature(s.cpuTemperature), fraction: s.cpuTemperature.map { $0 / 100 })
+                MiniStat(title: "Fans", value: fanText(s), fraction: s.fans.map(\.fraction).max())
+                MiniStat(title: powerTitle(s), value: powerText(s), fraction: nil)
+            }
+        }
+        .onAppear { monitor.start("menubar-panel") }
+        .onDisappear { monitor.stop("menubar-panel") }
+    }
+
+    private func fanText(_ s: SystemSnapshot) -> String {
+        guard s.hasFans else { return "None" }
+        guard let fan = s.fans.max(by: { $0.rpm < $1.rpm }) else { return "—" }
+        return fan.rpm < 100 ? "Off" : "\(Int(fan.rpm.rounded()))"
+    }
+
+    private func powerTitle(_ s: SystemSnapshot) -> String {
+        if let battery = s.battery { return battery.isCharging ? "Charging" : (battery.onAC ? "Plugged In" : "Battery") }
+        return "Power"
+    }
+
+    private func powerText(_ s: SystemSnapshot) -> String {
+        if let battery = s.battery { return "\(battery.percent)%" }
+        if let power = s.systemPower { return Format.watts(power) }
+        return "—"
+    }
+
+    private func openMain() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+private struct MiniStat: View {
+    let title: String
+    let value: String
+    let fraction: Double?
+    var warning = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .contentTransition(.numericText())
+            MeterBar(value: fraction ?? 0, height: 3, warning: warning)
+                .opacity(fraction == nil ? 0 : 1)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.primary.opacity(0.05)))
+    }
+}
+
+// MARK: - Quick actions
+
+private struct QuickActions: View {
+    @EnvironmentObject private var displays: DisplayManager
+    @EnvironmentObject private var tools: ToolsManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SectionLabel("Quick Actions")
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 8) {
                 if displays.canBoost {
                     QuickToggle(title: "Brighter", symbol: "sun.max.fill", isOn: displays.isBoostActive) {
                         withAnimation(.smooth) { displays.setBoostEnabled(!displays.boostEnabled) }
@@ -81,27 +315,27 @@ private struct QuickControls: View {
                     }
                 }
                 if tools.hasMicrophone {
-                    QuickToggle(title: tools.isMicMuted ? "Mic Off" : "Mic On", symbol: tools.isMicMuted ? "mic.slash.fill" : "mic.fill", isOn: tools.isMicMuted) {
+                    QuickToggle(title: tools.isMicMuted ? "Mic Off" : "Mic", symbol: tools.isMicMuted ? "mic.slash.fill" : "mic.fill", isOn: tools.isMicMuted) {
                         withAnimation(.smooth) { tools.setMicMuted(!tools.isMicMuted) }
                     }
                 }
-            }
-            HStack(spacing: 14) {
-                Label(Format.percent(s.cpu), systemImage: "cpu")
-                Label(Format.percent(s.memoryFraction), systemImage: "memorychip")
-                if let temperature = s.cpuTemperature {
-                    Label(Format.temperature(temperature), systemImage: "thermometer.medium")
+                QuickToggle(title: "Dark", symbol: "circle.lefthalf.filled", isOn: tools.isDarkMode) {
+                    tools.toggleDarkMode()
                 }
-                if let fan = s.fans.first, fan.rpm > 0 {
-                    Label("\(Int(fan.rpm.rounded()))", systemImage: "fan")
-                }
+                QuickToggle(title: "Eject All", symbol: "eject.fill", isOn: false) { tools.ejectAllDisks() }
+                QuickToggle(title: "Lock", symbol: "lock.fill", isOn: false) { tools.lockScreen() }
+                QuickToggle(title: "Screenshot", symbol: "camera.viewfinder", isOn: false) { tools.takeScreenshot() }
+                QuickToggle(title: "Sleep Screen", symbol: "moon.fill", isOn: false) { tools.sleepDisplays() }
             }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 4)
+            if let message = tools.message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
+            }
         }
-        .onAppear { monitor.start("menubar-panel") }
-        .onDisappear { monitor.stop("menubar-panel") }
+        .animation(.smooth(duration: 0.25), value: tools.message)
     }
 }
 
@@ -110,183 +344,43 @@ private struct QuickToggle: View {
     let symbol: String
     let isOn: Bool
     let action: () -> Void
+    @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 5) {
+            VStack(spacing: 4) {
                 Image(systemName: symbol)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(isOn ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                     .frame(width: 34, height: 34)
-                    .background(Circle().fill(isOn ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.08))))
+                    .background(Circle().fill(isOn ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(isHovering ? 0.14 : 0.08))))
                 Text(title)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
         .animation(.smooth(duration: 0.2), value: isOn)
+        .help(title)
     }
 }
 
-private struct ActiveDeviceSection: View {
-    @EnvironmentObject private var model: SoundModel
-    @EnvironmentObject private var battery: BatteryMonitor
-    let profile: DeviceProfile
+// MARK: - Shared pieces
+
+private struct SectionLabel: View {
+    let text: String
+    init(_ text: String) { self.text = text }
 
     var body: some View {
-        let status = model.status(of: profile)
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                DeviceBadge(symbol: profile.symbolName, tint: profile.tint, size: 38)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(profile.displayName).font(.headline).lineLimit(1)
-                    HStack(spacing: 5) {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 6))
-                            .foregroundStyle(status.color)
-                        Text(status.title).font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let info = battery.battery(for: model.currentOutput?.name) {
-                        BatteryLabel(info: info, showCase: true)
-                            .font(.caption2)
-                    }
-                }
-                Spacer(minLength: 0)
-                if model.isPlaying(profile) && model.engine.isRunning {
-                    LevelMeter(processor: model.engine.processor, route: model.route(for: profile) ?? 0, tint: profile.tint, isActive: true, height: 26)
-                }
-                Toggle("Equalizer", isOn: model.binding(profile.id, \.isEnabled, fallback: false, animation: .smooth(duration: 0.3)))
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-            }
-
-            ResponseCurveView(profile: profile, compact: true)
-                .frame(height: 70)
-                .padding(4)
-                .glassSurface(cornerRadius: 14, tint: profile.tint)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(model.presets(for: profile)) { preset in
-                        PresetChip(title: preset.name, isSelected: preset.name == profile.presetName, tint: profile.tint) {
-                            withAnimation(.smooth(duration: 0.5)) { model.apply(preset, to: profile.id) }
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Bass Boost")
-                    Spacer()
-                    Text(profile.bassBoost < 0.05 ? "Off" : String(format: "+%.1f dB", profile.bassBoost))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText(value: profile.bassBoost))
-                }
-                .font(.callout)
-                Slider(value: model.binding(profile.id, \.bassBoost, fallback: 0), in: EQBands.bassBoostRange, step: 0.5) {
-                    Text("Bass Boost")
-                }
-                .labelsHidden()
-            }
-            .disabled(!profile.isEnabled)
-        }
-        .tint(profile.tint)
-        .animation(.smooth(duration: 0.3), value: status)
-    }
-}
-
-/// Lists every output, like the Sound menu in Control Center. Clicking a name makes it the
-/// sound output; the circle on the right adds it to Multi-Output.
-private struct OutputPicker: View {
-    @EnvironmentObject private var model: SoundModel
-    @EnvironmentObject private var battery: BatteryMonitor
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Output")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if model.isGroupActive {
-                    Text("Playing on \(model.activeGroup.count)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.multiOutput)
-                        .transition(.opacity)
-                }
-            }
-            .padding(.horizontal, 8)
-
-            ForEach(model.connectedDevices) { device in
-                let profile = model.profile(for: device)
-                let isCurrent = device.uid == model.currentOutput?.uid
-                let isMember = model.isInGroup(device)
-                HStack(spacing: 0) {
-                    Button {
-                        model.playThrough(device)
-                    } label: {
-                        HStack(spacing: 10) {
-                            DeviceBadge(
-                                symbol: profile?.symbolName ?? "speaker.wave.2.fill",
-                                tint: profile?.tint ?? DeviceKind.other.tint,
-                                size: 24,
-                                dimmed: !isMember
-                            )
-                            Text(device.name).lineLimit(1)
-                            Spacer(minLength: 0)
-                            if let level = battery.battery(for: device.name)?.headline {
-                                HStack(spacing: 2) {
-                                    Image(systemName: BatteryLabel.symbol(level))
-                                        .foregroundStyle(BatteryLabel.color(level))
-                                    Text("\(level)%")
-                                }
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                            }
-                            if let profile, !profile.isFlat, profile.isEnabled {
-                                Text("EQ")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(profile.tint)
-                            }
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(HoverRowStyle())
-                    .help(isCurrent ? "Sound output" : "Make this the sound output")
-
-                    Button {
-                        withAnimation(.smooth(duration: 0.3)) { model.toggleGroupMember(device) }
-                    } label: {
-                        Image(systemName: isMember ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 17))
-                            .foregroundStyle(isMember ? AnyShapeStyle(profile?.tint ?? .accentColor) : AnyShapeStyle(.tertiary))
-                            .contentTransition(.symbolEffect(.replace))
-                            .frame(width: 30, height: 30)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isCurrent || !model.canAddToGroup(device))
-                    .help(isCurrent ? "The sound output always plays" : (isMember ? "Stop playing here" : "Also play here"))
-                }
-            }
-
-            if model.connectedDevices.count > 1 {
-                Text("Tick more than one device to play on all of them at once.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 8)
-                    .padding(.top, 2)
-            }
-        }
-        .animation(.smooth(duration: 0.3), value: model.isGroupActive)
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 2)
     }
 }
 
@@ -300,10 +394,26 @@ private struct PanelButton: View {
             Label(title, systemImage: symbol)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+                .padding(.vertical, 6)
                 .contentShape(Rectangle())
         }
         .buttonStyle(HoverRowStyle())
+    }
+}
+
+private struct PanelIconButton: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .frame(width: 30, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(HoverRowStyle())
+        .help(help)
     }
 }
 
@@ -320,7 +430,7 @@ private struct HoverRowStyle: ButtonStyle {
         var body: some View {
             configuration.label
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(Color.primary.opacity(configuration.isPressed ? 0.14 : (isHovering ? 0.08 : 0)))
                 )
                 .animation(.snappy(duration: 0.15), value: isHovering)

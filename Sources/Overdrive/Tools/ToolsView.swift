@@ -26,8 +26,11 @@ struct ToolsView: View {
                 microphoneCard
             }
 
-            Card(title: "Finder & Dock", symbol: "macwindow") {
+            Card(title: "Appearance, Finder & Dock", symbol: "macwindow") {
                 VStack(spacing: 10) {
+                    ToggleRow(title: "Dark Mode", detail: "Switch the whole Mac between light and dark.", isOn: Binding(
+                        get: { tools.isDarkMode }, set: { _ in tools.toggleDarkMode() }
+                    ))
                     ToggleRow(title: "Show hidden files", detail: "Files and folders that start with a dot.", isOn: Binding(
                         get: { tools.toggles.showHiddenFiles }, set: { tools.setShowHiddenFiles($0) }
                     ))
@@ -48,6 +51,9 @@ struct ToolsView: View {
 
             Card(title: "Quick Actions", symbol: "bolt") {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 10)], spacing: 10) {
+                    ActionButton(title: "Lock Screen", symbol: "lock", action: { tools.lockScreen() })
+                    ActionButton(title: "Take Screenshot", symbol: "camera.viewfinder", action: { tools.takeScreenshot() })
+                    ActionButton(title: "Empty Trash", symbol: "trash", action: { tools.emptyTrash() })
                     ActionButton(title: "Sleep Displays", symbol: "display", action: { tools.sleepDisplays() })
                     ActionButton(title: "Eject All Disks", symbol: "eject", action: { tools.ejectAllDisks() })
                     ActionButton(title: "Restart Dock", symbol: "dock.rectangle", action: { tools.restartDock() })
@@ -56,8 +62,18 @@ struct ToolsView: View {
                     ActionButton(title: "Activity Monitor", symbol: "chart.bar.xaxis", action: { tools.openActivityMonitor() })
                 }
             }
+
+            Card(title: "Network Address", symbol: "network") {
+                AddressRow(title: "On this network", detail: "Other devices on your Wi-Fi reach your Mac here.", address: tools.localAddress) {
+                    tools.refreshAddresses()
+                }
+                AddressRow(title: "On the internet", detail: "What websites see. Looked up only when you ask.", address: tools.publicAddress, isLoading: tools.isLookingUpPublicAddress) {
+                    tools.lookUpPublicAddress()
+                }
+            }
         }
         .navigationTitle("Tools")
+        .onAppear { tools.refreshAddresses() }
         .animation(.smooth(duration: 0.3), value: tools.message)
         .onAppear {
             tools.refreshToggles()
@@ -151,5 +167,40 @@ private struct ActionButton: View {
         .scaleEffect(isHovering ? 1.015 : 1)
         .animation(.snappy(duration: 0.15), value: isHovering)
         .onHover { isHovering = $0 }
+    }
+}
+
+private struct AddressRow: View {
+    @EnvironmentObject private var tools: ToolsManager
+    let title: String
+    let detail: String
+    let address: String?
+    var isLoading = false
+    let refresh: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if isLoading {
+                ProgressView().controlSize(.small)
+            } else if let address {
+                Text(address)
+                    .font(.body.monospaced())
+                    .textSelection(.enabled)
+                Button {
+                    tools.copy(address)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .help("Copy")
+            }
+            Button(address == nil ? "Show" : "Refresh", action: refresh)
+                .controlSize(.small)
+        }
     }
 }

@@ -9,6 +9,9 @@ A control center for your Mac: sound, display, performance and power-user tools 
 ### Overview
 The state of your Mac at a glance: what's playing and where, CPU, memory, GPU and temperature gauges, Extra Brightness, Keep Awake and the microphone. Each tile jumps to its page.
 
+### Menu bar
+Sound output and presets, a six-number system readout, and quick actions: Extra Brightness, Keep Awake, microphone, Dark Mode, Eject All, Lock, Screenshot and Sleep Screen.
+
 ### Sound
 - **An EQ for every output**: built-in speakers, displays, USB, AirPlay and Bluetooth. Beats Studio Pro, AirPods Pro 2 and Marshall Acton III get tuned bass-forward starting points. The right EQ switches on as soon as your Mac plays through a device.
 - **10-band EQ** with a draggable response curve, a live spectrum, Bass Boost, Hold to Compare, saved presets and distortion protection.
@@ -25,10 +28,12 @@ The state of your Mac at a glance: what's playing and where, CPU, memory, GPU an
 - **Resolution**: every scaled resolution and refresh rate your display supports.
 
 ### Performance
-CPU (per core), GPU, memory and memory pressure, CPU/GPU/battery temperatures, fan speeds, system power draw, battery health and cycle count, network and disk throughput, free space, and the busiest apps. It only samples while you're looking, so it costs nothing in the background. Settings can also put CPU and temperature in the menu bar.
+CPU (per core), GPU, memory and memory pressure, CPU/GPU/battery temperatures (performance and efficiency cores separately where the chip reports them), fan speeds, how much power the Mac is using and how much goes into the battery, battery health and cycle count, network and disk activity, free space, and the busiest apps with plain-English descriptions of common system processes. Every number has a short explanation. It only samples while you're looking, so it costs nothing in the background. Settings can also put CPU and temperature in the menu bar.
 
 ### Tools
 - **Keep Awake** for 15 minutes up to indefinitely, with or without letting the display sleep.
+- **Dark Mode**, **Lock Screen**, **Screenshot** and **Empty Trash** in one click. Dark Mode and Empty Trash ask once for permission to control System Events and Finder.
+- **Network address** on your local network and, on request, on the internet, with copy buttons.
 - **Microphone mute** for every app at once.
 - **Finder and Dock**: show hidden files, show all file extensions, hide desktop icons, hide the Dock automatically.
 - **Quick actions**: sleep displays, eject all disks, restart the Dock, Finder or the menu bar, open Activity Monitor.

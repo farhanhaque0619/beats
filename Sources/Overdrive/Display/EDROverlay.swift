@@ -9,10 +9,9 @@ import QuartzCore
 @MainActor
 final class EDROverlay: NSObject, MTKViewDelegate {
     private var windows: [CGDirectDisplayID: NSWindow] = [:]
-    private let device = MTLCreateSystemDefaultDevice()
+    // Created only once Extra Brightness is first switched on, so it costs nothing otherwise.
+    private lazy var device: MTLDevice? = MTLCreateSystemDefaultDevice()
     private lazy var queue = device?.makeCommandQueue()
-
-    var isAvailable: Bool { device != nil }
 
     /// Shows the overlay on exactly these screens with an EDR value above 1.
     func show(on screens: [(id: CGDirectDisplayID, screen: NSScreen)], value: Double) {
@@ -21,7 +20,7 @@ final class EDROverlay: NSObject, MTKViewDelegate {
             window.orderOut(nil)
             windows[id] = nil
         }
-        guard let device else { return }
+        guard !screens.isEmpty, let device else { return }
         for (id, screen) in screens {
             let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - 2, width: 2, height: 2)
             let window = windows[id] ?? makeWindow(device: device)

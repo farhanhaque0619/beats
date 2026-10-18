@@ -28,10 +28,11 @@ struct DisplayModeOption: Identifiable, Hashable {
 
     var isHiDPI: Bool { pixelWidth > width }
 
-    var title: String {
+    /// "1512 × 982 · 120 Hz". Non-Retina modes are marked only when Retina ones exist.
+    func title(markLowResolution: Bool) -> String {
         var text = "\(width) × \(height)"
         if refreshRate > 0 { text += " · \(Int(refreshRate.rounded())) Hz" }
-        if !isHiDPI { text += " (low resolution)" }
+        if markLowResolution && !isHiDPI { text += " (low resolution)" }
         return text
     }
 

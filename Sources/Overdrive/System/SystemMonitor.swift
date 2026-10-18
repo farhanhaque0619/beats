@@ -79,6 +79,7 @@ struct SystemSnapshot: Equatable {
     var battery: BatteryHealth?
     var thermal: ProcessInfo.ThermalState = .nominal
     var topProcesses: [ProcessUsage] = []
+    var uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
 
     var memoryFraction: Double { memoryTotal > 0 ? Double(memoryUsed) / Double(memoryTotal) : 0 }
 }
@@ -153,7 +154,7 @@ final class SystemMonitor: ObservableObject {
         clients[client] = detailed
         guard timer == nil else { return }
         sample()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.sample() }
         }
     }
@@ -202,6 +203,9 @@ private final class Sampler {
     private var previousNetwork: (down: UInt64, up: UInt64, time: TimeInterval)?
     private var previousDisk: (read: UInt64, write: UInt64, time: TimeInterval)?
     private var previousProcesses: [pid_t: UInt64] = [:]
+    /// Which app each process belongs to. Looking this up is the expensive part, so it's
+    /// done once per process and only for the busiest few.
+    private var identities: [pid_t: (key: String, name: String, path: String?)] = [:]
     private var previousProcessTime: TimeInterval = 0
     /// The temperature keys this Mac actually has, found on the first sample.
     private var temperatureKeys: TemperatureKeys?
@@ -423,26 +427,37 @@ private final class Sampler {
     // MARK: Network and disk
 
     private func readNetwork(into snapshot: inout SystemSnapshot) {
-        var addresses: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&addresses) == 0, let first = addresses else { return }
-        defer { freeifaddrs(addresses) }
+        // The routing table's interface list has 64-bit byte counters for every interface.
+        var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0]
+        var length = 0
+        guard sysctl(&mib, UInt32(mib.count), nil, &length, nil, 0) == 0, length > 0 else { return }
+        var buffer = [UInt8](repeating: 0, count: length)
+        guard sysctl(&mib, UInt32(mib.count), &buffer, &length, nil, 0) == 0 else { return }
+
         var down: UInt64 = 0
         var up: UInt64 = 0
-        var cursor: UnsafeMutablePointer<ifaddrs>? = first
-        while let entry = cursor {
-            let interface = entry.pointee
-            if let address = interface.ifa_addr, address.pointee.sa_family == UInt8(AF_LINK),
-               let data = interface.ifa_data {
-                let name = String(cString: interface.ifa_name)
-                // Physical interfaces only, so VPN tunnels don't count traffic twice.
-                if name.hasPrefix("en") {
-                    let stats = data.assumingMemoryBound(to: if_data.self).pointee
-                    down += UInt64(stats.ifi_ibytes)
-                    up += UInt64(stats.ifi_obytes)
+        buffer.withUnsafeBytes { raw in
+            var offset = 0
+            while offset + MemoryLayout<if_msghdr>.size <= length {
+                let header = raw.loadUnaligned(fromByteOffset: offset, as: if_msghdr.self)
+                let messageLength = Int(header.ifm_msglen)
+                guard messageLength > 0 else { break }
+                if header.ifm_type == 0x12 /* RTM_IFINFO2 */, offset + MemoryLayout<if_msghdr2>.size <= length {
+                    let info = raw.loadUnaligned(fromByteOffset: offset, as: if_msghdr2.self)
+                    var name = [CChar](repeating: 0, count: Int(IF_NAMESIZE))
+                    if if_indextoname(UInt32(info.ifm_index), &name) != nil {
+                        let interface = String(cString: name)
+                        // Wi-Fi and Ethernet only, so VPN tunnels don't count traffic twice.
+                        if interface.hasPrefix("en") {
+                            down += info.ifm_data.ifi_ibytes
+                            up += info.ifm_data.ifi_obytes
+                        }
+                    }
                 }
+                offset += messageLength
             }
-            cursor = interface.ifa_next
         }
+
         let now = ProcessInfo.processInfo.systemUptime
         if let previous = previousNetwork, now > previous.time, down >= previous.down, up >= previous.up {
             snapshot.networkDown = Double(down - previous.down) / (now - previous.time)
@@ -483,8 +498,9 @@ private final class Sampler {
         let now = ProcessInfo.processInfo.systemUptime
         let elapsed = now - previousProcessTime
         var times: [pid_t: UInt64] = [:]
-        var usage: [String: (name: String, path: String?, cpu: Double, memory: UInt64)] = [:]
+        var busy: [(pid: pid_t, cpu: Double, memory: UInt64)] = []
 
+        // Reading usage for every process is a cheap system call each.
         for pid in pids.prefix(max(found, 0)) where pid > 0 {
             var info = rusage_info_v2()
             let result = withUnsafeMutablePointer(to: &info) { pointer in
@@ -495,19 +511,27 @@ private final class Sampler {
             guard result == 0 else { continue }
             let total = info.ri_user_time &+ info.ri_system_time
             times[pid] = total
-            guard previousProcessTime > 0, elapsed > 0, let before = previousProcesses[pid], total >= before else { continue }
-            let cpu = Double(total - before) * ticksToSeconds / elapsed
-            let identity = AppIdentity.resolve(pid: pid)
-            var entry = usage[identity.key] ?? (identity.name, identity.path, 0, 0)
-            entry.cpu += cpu
-            entry.memory += info.ri_phys_footprint
-            usage[identity.key] = entry
+            guard previousProcessTime > 0, elapsed > 0, let before = previousProcesses[pid], total > before else { continue }
+            busy.append((pid, Double(total - before) * ticksToSeconds / elapsed, info.ri_phys_footprint))
         }
         previousProcesses = times
         previousProcessTime = now
+        identities = identities.filter { times[$0.key] != nil }
+
+        // Only the busiest processes are matched to their apps.
+        var usage: [String: (name: String, path: String?, cpu: Double, memory: UInt64)] = [:]
+        for process in busy.sorted(by: { $0.cpu > $1.cpu }).prefix(24) {
+            let identity = identities[process.pid] ?? AppIdentity.resolve(pid: process.pid)
+            identities[process.pid] = identity
+            var entry = usage[identity.key] ?? (identity.name, identity.path, 0, 0)
+            entry.cpu += process.cpu
+            entry.memory += process.memory
+            usage[identity.key] = entry
+        }
 
         return usage
             .map { ProcessUsage(id: $0.key, name: $0.value.name, bundlePath: $0.value.path, cpu: $0.value.cpu, memory: $0.value.memory) }
+            .filter { $0.cpu >= 0.005 }
             .sorted { $0.cpu > $1.cpu }
             .prefix(6)
             .map { $0 }

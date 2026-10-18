@@ -153,7 +153,11 @@ struct DeviceProfile: Codable, Identifiable, Equatable {
     var presetName: String
     /// SF Symbol picked when the device was first seen. Optional so older saves still load.
     var iconName: String?
+    /// Whether this device has ever connected to this Mac. Tuned profiles stay hidden until
+    /// then, so a Mac without those headphones doesn't list them. Older saves read as seen.
+    var seen: Bool?
 
+    var hasBeenSeen: Bool { seen ?? true }
     var symbolName: String { iconName ?? kind.symbolName }
 
     /// True when the settings wouldn't change the sound, so no processing is needed.
@@ -172,7 +176,8 @@ struct DeviceProfile: Codable, Identifiable, Equatable {
             bassBoost: 0,
             preampDB: 0,
             preventsClipping: true,
-            presetName: preset.name
+            presetName: preset.name,
+            seen: false
         )
     }
 

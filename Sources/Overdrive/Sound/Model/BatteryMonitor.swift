@@ -27,6 +27,7 @@ final class BatteryMonitor: ObservableObject {
 
     private var timer: Timer?
     private var isRefreshing = false
+    private var lastSoon: Date?
 
     init() {
         refresh()
@@ -54,8 +55,11 @@ final class BatteryMonitor: ObservableObject {
         }
     }
 
-    /// Call after Bluetooth devices connect: levels show up a few seconds later.
+    /// Call after Bluetooth devices connect: levels show up a few seconds later. Overdrive's
+    /// own audio routing also changes the device list, so repeat calls are skipped for a while.
     func refreshSoon() {
+        if let lastSoon, Date().timeIntervalSince(lastSoon) < 30 { return }
+        lastSoon = Date()
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(4))
             self?.refresh()

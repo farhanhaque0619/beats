@@ -119,7 +119,10 @@ final class SoundModel: ObservableObject {
         return profiles.first { $0.id == profileID(for: currentOutput) }
     }
 
-    var knownProfiles: [DeviceProfile] { profiles.filter { $0.kind != .other } }
+    /// Tuned devices (Beats, AirPods, Marshall) that have connected to this Mac at least once.
+    var knownProfiles: [DeviceProfile] {
+        profiles.filter { $0.kind != .other && ($0.hasBeenSeen || isConnected($0)) }
+    }
 
     /// Other outputs that are plugged in or paired right now.
     var connectedOtherProfiles: [DeviceProfile] {
@@ -458,12 +461,19 @@ final class SoundModel: ObservableObject {
 
     private func refreshDevices() {
         connectedDevices = HAL.outputDevices()
-        var added = false
-        for device in connectedDevices where profile(for: device) == nil {
-            profiles.append(.other(uid: device.uid, name: device.name, transportType: device.transportType))
-            added = true
+        var changed = false
+        for device in connectedDevices {
+            if let index = profiles.firstIndex(where: { $0.id == profileID(for: device) }) {
+                if profiles[index].seen == false {
+                    profiles[index].seen = true
+                    changed = true
+                }
+            } else {
+                profiles.append(.other(uid: device.uid, name: device.name, transportType: device.transportType))
+                changed = true
+            }
         }
-        if added { scheduleSave() }
+        if changed { scheduleSave() }
     }
 
     private func outputDidChange() {

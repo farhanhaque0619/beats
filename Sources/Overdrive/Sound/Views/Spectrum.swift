@@ -79,7 +79,7 @@ struct SpectrumView: View {
     @StateObject private var analyzer = SpectrumAnalyzer()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: !isActive)) { _ in
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !isActive)) { _ in
             let levels = isActive ? analyzer.update(from: processor, sampleRate: sampleRate) : analyzer.decay()
             Canvas { context, size in
                 guard levels.contains(where: { $0 > 0.01 }) else { return }

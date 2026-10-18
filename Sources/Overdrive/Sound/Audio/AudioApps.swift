@@ -13,7 +13,7 @@ struct AudioApp: Identifiable, Equatable {
     var isPlaying: Bool
 
     var icon: NSImage {
-        if let bundlePath { return NSWorkspace.shared.icon(forFile: bundlePath) }
+        if let bundlePath { return IconCache.icon(forFile: bundlePath) }
         return NSWorkspace.shared.icon(for: .applicationBundle)
     }
 }

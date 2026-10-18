@@ -386,7 +386,7 @@ struct LevelMeter: View {
     var height: CGFloat = 36
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: !isActive)) { _ in
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !isActive)) { _ in
             HStack(spacing: 3) {
                 bar(isActive ? processor.meterLevel(route: route, channel: 0) : 0)
                 bar(isActive ? processor.meterLevel(route: route, channel: 1) : 0)

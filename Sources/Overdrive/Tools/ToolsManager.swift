@@ -34,6 +34,10 @@ final class ToolsManager: ObservableObject {
     @Published private(set) var hasMicrophone = false
     @Published private(set) var toggles = Toggles()
     @Published private(set) var message: String?
+    @Published private(set) var isDarkMode = false
+    @Published private(set) var localAddress: String?
+    @Published private(set) var publicAddress: String?
+    @Published private(set) var isLookingUpPublicAddress = false
 
     private var assertionID: IOPMAssertionID = 0
     private var expiryTimer: Timer?
@@ -46,8 +50,14 @@ final class ToolsManager: ObservableObject {
     init() {
         refreshMicrophone()
         refreshToggles()
+        refreshAppearance()
         HAL.observeSystem(kAudioHardwarePropertyDefaultInputDevice) { [weak self] in
             Task { @MainActor in self?.refreshMicrophone() }
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"), object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshAppearance() }
         }
     }
 
@@ -213,6 +223,106 @@ final class ToolsManager: ObservableObject {
         }
     }
 
+    // MARK: - Appearance and session
+
+    func refreshAppearance() {
+        let style = CFPreferencesCopyValue("AppleInterfaceStyle" as CFString, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? String
+        isDarkMode = style == "Dark"
+    }
+
+    /// Switches the whole Mac between light and dark. macOS asks once for permission to
+    /// control System Events, the app that owns this setting.
+    func toggleDarkMode() {
+        let target = !isDarkMode
+        isDarkMode = target
+        Task {
+            let ok = await Task.detached(priority: .userInitiated) {
+                Self.execute(["/usr/bin/osascript", "-e",
+                              "tell application \"System Events\" to tell appearance preferences to set dark mode to \(target)"])
+            }.value
+            if !ok {
+                refreshAppearance()
+                show("Allow Overdrive to control System Events in Privacy & Security › Automation.")
+            }
+        }
+    }
+
+    /// Locks the Mac the same way Control Center's Lock Screen does.
+    func lockScreen() {
+        typealias LockFn = @convention(c) () -> Int32
+        if let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY),
+           let symbol = dlsym(handle, "SACLockScreenImmediate") {
+            _ = unsafeBitCast(symbol, to: LockFn.self)()
+        } else {
+            sleepDisplays()
+        }
+    }
+
+    func takeScreenshot() {
+        run(["/usr/bin/open", "-a", "Screenshot"])
+    }
+
+    func emptyTrash() {
+        Task {
+            let ok = await Task.detached(priority: .userInitiated) {
+                Self.execute(["/usr/bin/osascript", "-e", "tell application \"Finder\" to empty trash"])
+            }.value
+            show(ok ? "Emptied the Trash." : "Allow Overdrive to control Finder in Privacy & Security › Automation.")
+        }
+    }
+
+    // MARK: - Network
+
+    func refreshAddresses() {
+        localAddress = Self.localIPv4()
+    }
+
+    func lookUpPublicAddress() {
+        guard !isLookingUpPublicAddress else { return }
+        isLookingUpPublicAddress = true
+        Task {
+            defer { isLookingUpPublicAddress = false }
+            guard let url = URL(string: "https://api.ipify.org") else { return }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 10
+            if let (data, _) = try? await URLSession.shared.data(for: request),
+               let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !text.isEmpty, text.count < 64 {
+                publicAddress = text
+            } else {
+                show("Couldn’t look up your public address. Check your internet connection.")
+            }
+        }
+    }
+
+    func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        show("Copied \(text).")
+    }
+
+    /// The Mac's address on the local network (Wi-Fi or Ethernet).
+    private static func localIPv4() -> String? {
+        var addresses: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addresses) == 0, let first = addresses else { return nil }
+        defer { freeifaddrs(addresses) }
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        var found: [(name: String, address: String)] = []
+        while let entry = cursor {
+            let interface = entry.pointee
+            if let address = interface.ifa_addr, address.pointee.sa_family == UInt8(AF_INET) {
+                let name = String(cString: interface.ifa_name)
+                var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if name.hasPrefix("en"),
+                   getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+                    found.append((name, String(cString: host)))
+                }
+            }
+            cursor = interface.ifa_next
+        }
+        return found.sorted { $0.name < $1.name }.first?.address
+    }
+
     // MARK: - Helpers
 
     private func show(_ text: String) {
@@ -232,15 +342,17 @@ final class ToolsManager: ObservableObject {
         }
     }
 
-    nonisolated private static func execute(_ command: [String]) {
-        guard let path = command.first else { return }
+    @discardableResult
+    nonisolated private static func execute(_ command: [String]) -> Bool {
+        guard let path = command.first else { return false }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = Array(command.dropFirst())
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try? process.run()
+        do { try process.run() } catch { return false }
         process.waitUntilExit()
+        return process.terminationStatus == 0
     }
 
     private static func optionalBool(_ key: String, app: String) -> Bool? {

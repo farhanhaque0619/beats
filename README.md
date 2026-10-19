@@ -6,8 +6,10 @@ A control center for your Mac: sound, display, performance and power-user tools 
 
 ## Sections
 
+Every page starts with a short summary. Click a tile, chip or ⓘ for the details and what they mean.
+
 ### Overview
-The state of your Mac at a glance: what's playing and where, CPU, memory, GPU and temperature gauges, Extra Brightness, Keep Awake and the microphone. Each tile jumps to its page.
+A health strip that says whether anything needs attention, then the state of your Mac at a glance: what's playing and where, CPU, memory, GPU and temperature gauges, Extra Brightness, Keep Awake and the microphone. Each tile jumps to its page.
 
 ### Menu bar
 Sound output and presets, a six-number system readout, and quick actions: Extra Brightness, Keep Awake, microphone, Dark Mode, Eject All, Lock, Screenshot and Sleep Screen.
@@ -28,7 +30,7 @@ Sound output and presets, a six-number system readout, and quick actions: Extra 
 - **Resolution**: every scaled resolution and refresh rate your display supports.
 
 ### Performance
-CPU (per core), GPU, memory and memory pressure, CPU/GPU/battery temperatures (performance and efficiency cores separately where the chip reports them), fan speeds, how much power the Mac is using and how much goes into the battery, battery health and cycle count, network and disk activity, free space, and the busiest apps with plain-English descriptions of common system processes. Every number has a short explanation. It only samples while you're looking, so it costs nothing in the background. Settings can also put CPU and temperature in the menu bar.
+Eight tiles (Processor, Graphics, Memory, Heat & Fans, Battery & Power, Network, Storage, Busiest Apps), each with one number and a plain status. Click one for its own page: a 3-minute chart, the breakdown, and an explanation. Busiest Apps can quit an app. Covers CPU (per core), GPU, memory and memory pressure, CPU/GPU/battery temperatures (performance and efficiency cores separately where the chip reports them), fan speeds, how much power the Mac is using and how much goes into the battery, battery health and cycle count, network and disk activity, free space, and the busiest apps with plain-English descriptions of common system processes. Every number has a short explanation. It only samples while you're looking, so it costs nothing in the background. Settings can also put CPU and temperature in the menu bar.
 
 ### Tools
 - **Keep Awake** for 15 minutes up to indefinitely, with or without letting the display sleep.

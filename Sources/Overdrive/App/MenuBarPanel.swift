@@ -63,12 +63,19 @@ struct MenuBarPanel: View {
 private struct SoundSection: View {
     @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var battery: BatteryMonitor
+    @Environment(\.openWindow) private var openWindow
     let profile: DeviceProfile
 
     var body: some View {
         let status = model.status(of: profile)
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
+                Button {
+                    model.selectedProfileID = model.isGroupActive ? SoundModel.groupSelectionID : profile.id
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                } label: {
+                    HStack(spacing: 10) {
                 DeviceBadge(symbol: profile.symbolName, size: 34)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -85,6 +92,11 @@ private struct SoundSection: View {
                             .lineLimit(1)
                     }
                 }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open this device’s sound settings")
                 Spacer(minLength: 8)
                 Toggle("Equalizer", isOn: model.binding(profile.id, \.isEnabled, fallback: false, animation: .smooth(duration: 0.3)))
                     .toggleStyle(.switch)
@@ -227,21 +239,34 @@ private struct SystemSection: View {
             HStack {
                 SectionLabel("System")
                 Spacer()
-                Button("Details") { model.selectedProfileID = Page.performance; openMain() }
+                Button("Details") { open(nil) }
                     .buttonStyle(.borderless)
                     .font(.caption)
             }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                MiniStat(title: "CPU", value: Format.percent(s.cpu), fraction: s.cpu)
-                MiniStat(title: "GPU", value: s.gpu.map(Format.percent) ?? "—", fraction: s.gpu)
-                MiniStat(title: "Memory", value: Format.percent(s.memoryFraction), fraction: s.memoryFraction, warning: s.pressure != .normal)
-                MiniStat(title: "CPU Temp", value: Format.temperature(s.cpuTemperature), fraction: s.cpuTemperature.map { $0 / 100 })
-                MiniStat(title: "Fans", value: fanText(s), fraction: s.fans.map(\.fraction).max())
-                MiniStat(title: powerTitle(s), value: powerText(s), fraction: nil)
+                tile(.cpu, MiniStat(title: "CPU", value: Format.percent(s.cpu), fraction: s.cpu))
+                tile(.gpu, MiniStat(title: "GPU", value: s.gpu.map(Format.percent) ?? "—", fraction: s.gpu))
+                tile(.memory, MiniStat(title: "Memory", value: Format.percent(s.memoryFraction), fraction: s.memoryFraction, warning: s.pressure != .normal))
+                tile(.temperature, MiniStat(title: "CPU Temp", value: Format.temperature(s.cpuTemperature), fraction: s.cpuTemperature.map { $0 / 100 }))
+                tile(.temperature, MiniStat(title: "Fans", value: fanText(s), fraction: s.fans.map(\.fraction).max()))
+                tile(.power, MiniStat(title: powerTitle(s), value: powerText(s), fraction: nil))
             }
         }
         .onAppear { monitor.start("menubar-panel") }
         .onDisappear { monitor.stop("menubar-panel") }
+    }
+
+    /// Each tile opens its own detail page in the main window.
+    private func tile(_ metric: Metric, _ stat: MiniStat) -> some View {
+        Button { open(metric) } label: { stat }
+            .buttonStyle(.plain)
+            .help("Show \(metric.title) details")
+    }
+
+    private func open(_ metric: Metric?) {
+        model.selectedProfileID = Page.performance
+        monitor.focusedMetric = metric
+        openMain()
     }
 
     private func fanText(_ s: SystemSnapshot) -> String {

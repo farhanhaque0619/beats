@@ -8,8 +8,10 @@ struct DisplayView: View {
             PageHeader(
                 symbol: "sun.max",
                 title: "Displays",
-                subtitle: "Extra brightness for XDR screens, dimming below the minimum, and every resolution your display supports."
-            )
+                subtitle: "Brightness, dimming and resolution for every screen."
+            ) {
+                InfoButton("Extra Brightness and dimming change the display’s colour table. macOS puts it back the moment Overdrive quits, even if it quits unexpectedly. The panel’s own firmware still limits power and heat.")
+            }
 
             if displays.canBoost {
                 BoostCard()
@@ -19,13 +21,6 @@ struct DisplayView: View {
                 DisplayCard(display: display)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Extra Brightness and dimming change the display’s colour table. macOS puts it back the moment Overdrive quits, even if it quits unexpectedly.", systemImage: "arrow.uturn.backward.circle")
-                Label("The panel’s own firmware still limits power and heat, so it can’t be pushed beyond what the hardware is built for.", systemImage: "checkmark.shield")
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
         }
         .navigationTitle("Displays")
         .onAppear { displays.refreshBrightness() }
@@ -36,7 +31,8 @@ private struct BoostCard: View {
     @EnvironmentObject private var displays: DisplayManager
 
     var body: some View {
-        Card(title: "Extra Brightness", symbol: "sun.max.trianglebadge.exclamationmark", trailing: {
+        Card(title: "Extra Brightness", symbol: "sun.max.trianglebadge.exclamationmark",
+             info: "Uses your XDR display’s HDR headroom, the same way HDR video gets brighter than the rest of the screen. Turn the regular brightness all the way up first for the full effect. It pauses by itself when the Mac is hot or the battery is low, and uses more battery while it’s on.", trailing: {
             Toggle("Extra Brightness", isOn: Binding(
                 get: { displays.boostEnabled },
                 set: { newValue in withAnimation(.smooth) { displays.setBoostEnabled(newValue) } }
@@ -45,10 +41,9 @@ private struct BoostCard: View {
             .labelsHidden()
         }) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Goes past the normal brightness limit by using the HDR headroom of your XDR display, the same way HDR video gets brighter than the rest of the screen. Turn the regular brightness all the way up first for the full effect.")
+                Text("Go brighter than the normal maximum.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 10) {
                     Image(systemName: "sun.min").foregroundStyle(.secondary)
@@ -80,7 +75,7 @@ private struct BoostCard: View {
     private var statusText: String {
         if !displays.boostEnabled { return "Off" }
         if let reason = displays.boostPausedReason { return reason }
-        return "On. Uses more battery while it’s on."
+        return "On"
     }
 
     private var statusColor: Color {
@@ -125,7 +120,7 @@ private struct DisplayCard: View {
                 }
             }
 
-            ControlRow(title: "Dim", symbol: "moon") {
+            ControlRow(title: "Dim", symbol: "moon", help: "Dims below the lowest brightness setting, handy at night. 100% is normal.") {
                 Slider(value: Binding(
                     get: { displays.dimLevel(for: display) },
                     set: { displays.setDimLevel($0, for: display) }
@@ -134,10 +129,6 @@ private struct DisplayCard: View {
                     .font(.callout.monospacedDigit())
                     .frame(width: 44, alignment: .trailing)
             }
-            Text("Dims below the lowest brightness setting, handy at night. 100% is normal.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .padding(.leading, 110)
 
             if !modes.isEmpty {
                 ControlRow(title: "Resolution", symbol: "rectangle.dashed") {
@@ -190,6 +181,7 @@ private struct DisplayCard: View {
 private struct ControlRow<Content: View>: View {
     let title: String
     let symbol: String
+    var help: String? = nil
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -197,6 +189,7 @@ private struct ControlRow<Content: View>: View {
             Label(title, systemImage: symbol)
                 .frame(width: 100, alignment: .leading)
                 .foregroundStyle(.secondary)
+                .help(help ?? title)
             content
         }
     }

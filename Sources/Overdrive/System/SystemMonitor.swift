@@ -84,6 +84,39 @@ struct SystemSnapshot: Equatable {
     var memoryFraction: Double { memoryTotal > 0 ? Double(memoryUsed) / Double(memoryTotal) : 0 }
 }
 
+/// One topic on the Performance page, each with its own detail view.
+enum Metric: String, CaseIterable, Identifiable, Hashable {
+    case cpu, gpu, memory, temperature, power, network, storage, apps
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .cpu: "Processor"
+        case .gpu: "Graphics"
+        case .memory: "Memory"
+        case .temperature: "Heat & Fans"
+        case .power: "Battery & Power"
+        case .network: "Network"
+        case .storage: "Storage"
+        case .apps: "Busiest Apps"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .cpu: "cpu"
+        case .gpu: "square.stack.3d.up"
+        case .memory: "memorychip"
+        case .temperature: "thermometer.medium"
+        case .power: "bolt"
+        case .network: "network"
+        case .storage: "internaldrive"
+        case .apps: "list.number"
+        }
+    }
+}
+
 /// Static facts about this Mac, read once.
 struct MachineInfo {
     let chip: String
@@ -140,6 +173,10 @@ final class SystemMonitor: ObservableObject {
     @Published private(set) var gpuHistory: [Double] = []
     @Published private(set) var memoryHistory: [Double] = []
     @Published private(set) var temperatureHistory: [Double] = []
+    @Published private(set) var downloadHistory: [Double] = []
+    /// The detail page open on the Performance page, if any. Other screens set this to jump
+    /// straight to a metric.
+    @Published var focusedMetric: Metric?
 
     let machine = MachineInfo.current
 
@@ -187,6 +224,7 @@ final class SystemMonitor: ObservableObject {
         append(new.gpu ?? 0, to: &gpuHistory)
         append(new.memoryFraction, to: &memoryHistory)
         if let temperature = new.cpuTemperature { append(temperature, to: &temperatureHistory) }
+        append(new.networkDown, to: &downloadHistory)
     }
 
     private func append(_ value: Double, to history: inout [Double]) {

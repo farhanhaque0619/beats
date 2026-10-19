@@ -11,20 +11,32 @@ struct GroupView: View {
     @EnvironmentObject private var model: SoundModel
 
     var body: some View {
-        ScrollView {
-            GlassGroup(spacing: 18) {
-                VStack(alignment: .leading, spacing: 16) {
-                    header
-                    deviceList
-                    splitCard
-                    syncCard
-                    tips
+        PageScroll {
+            PageHeader(symbol: "hifispeaker.2.fill", title: "Multi-Output", subtitle: statusText) {
+                InfoButton("""
+                Tick devices to play on all of them at once. Each keeps its own EQ.
+
+                Your volume keys control the device marked Main. Use the volume in each row for the others.
+
+                Two pairs of AirPods work. If one stutters, move closer to your Mac, since they share its Bluetooth.
+                """)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(sortedDevices) { device in
+                    GroupDeviceRow(device: device)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 960)
-            .frame(maxWidth: .infinity)
+            .animation(.smooth(duration: 0.35), value: model.extraOutputUIDs)
+            .animation(.smooth(duration: 0.35), value: model.connectedDevices.map(\.uid))
+
+            if model.isGroupActive {
+                arrangeBar
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
+        .animation(.smooth(duration: 0.3), value: model.isGroupActive)
         .navigationTitle("Multi-Output")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -41,60 +53,43 @@ struct GroupView: View {
         .tint(.multiOutput)
     }
 
-    // MARK: Header
-
-    private var header: some View {
-        HStack(alignment: .center, spacing: 18) {
-            DeviceBadge(symbol: "hifispeaker.2.fill", tint: .multiOutput, size: 72)
-                .shadow(color: .black.opacity(0.08), radius: 6, y: 3)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Multi-Output")
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
-                Text("Play your Mac’s sound on several headphones and speakers at once. Each one keeps its own EQ.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
-                    Image(systemName: "circle.fill")
-                        .font(.system(size: 7))
-                        .foregroundStyle(model.isGroupActive ? Color.green : Color.secondary)
-                        .symbolEffect(.pulse, options: .repeating, isActive: model.isGroupActive)
-                    Text(statusText)
-                        .font(.callout.weight(.medium))
-                        .contentTransition(.opacity)
-                }
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
-                .glassSurface(cornerRadius: 100)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(20)
-        .glassSurface(cornerRadius: 26, tint: .multiOutput)
-        .animation(.smooth(duration: 0.3), value: model.isGroupActive)
-    }
-
     private var statusText: String {
         let count = model.activeGroup.count
-        if count > 1 { return "Playing on \(count) devices" }
-        if model.connectedDevices.count < 2 { return "Connect a second device to start" }
-        return "Pick another device below to start"
+        if count > 1 { return "Playing on \(count) devices at once." }
+        if model.connectedDevices.count < 2 { return "Connect a second speaker or pair of headphones to start." }
+        return "Tick another device below to play on both."
     }
 
-    // MARK: Devices
-
-    private var deviceList: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Devices", systemImage: "speaker.wave.2")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 4)
-            ForEach(sortedDevices) { device in
-                GroupDeviceRow(device: device)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+    /// The two one-click helpers, with their explanations tucked into ⓘ buttons.
+    private var arrangeBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(.smooth(duration: 0.35)) { model.smartSplit() }
+            } label: {
+                Label("Smart Split", systemImage: "sparkles")
             }
+            .disabled(model.builtInGroupMembers.isEmpty)
+            InfoButton("Gives your Mac’s built-in speakers the vocals and every other device the music and bass, so together they sound wider and clearer. Needs the built-in speakers in the group.")
+
+            Divider().frame(height: 18)
+
+            Button {
+                withAnimation(.smooth(duration: 0.35)) { model.autoSync() }
+            } label: {
+                Label("Auto-Sync", systemImage: "timer")
+            }
+            InfoButton("Bluetooth plays a little later than wired speakers, which can sound like an echo. Auto-Sync delays the faster devices to match. Fine-tune any device with the delay in its row.")
+
+            Spacer()
+
+            Button("Reset Roles") {
+                withAnimation(.smooth(duration: 0.35)) { model.resetRoles() }
+            }
+            .buttonStyle(.borderless)
         }
-        .animation(.smooth(duration: 0.35), value: model.extraOutputUIDs)
-        .animation(.smooth(duration: 0.35), value: model.connectedDevices.map(\.uid))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .glassSurface(cornerRadius: 18)
     }
 
     /// The sound output first, then the other group members, then everything else.
@@ -109,216 +104,150 @@ struct GroupView: View {
             (rank(a), a.name) < (rank(b), b.name)
         }
     }
-
-    // MARK: Split
-
-    private var splitCard: some View {
-        let canSmartSplit = model.isGroupActive && !model.builtInGroupMembers.isEmpty
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Split the Sound", systemImage: "rectangle.split.2x1")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Reset Roles") {
-                    withAnimation(.smooth(duration: 0.35)) { model.resetRoles() }
-                }
-                .disabled(!model.isGroupActive)
-                Button {
-                    withAnimation(.smooth(duration: 0.35)) { model.smartSplit() }
-                } label: {
-                    Label("Smart Split", systemImage: "sparkles")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canSmartSplit)
-                .help(canSmartSplit
-                      ? "MacBook speakers take the vocals, everything else takes the music and bass"
-                      : "Add your Mac’s built-in speakers to the group to use Smart Split")
-            }
-            Text("Give each device a role. For example, your MacBook speakers can carry the vocals while a bigger speaker like the Acton III plays the music and bass. Together they sound wider and clearer than either alone.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .glassCard()
-    }
-
-    // MARK: Sync
-
-    private var syncCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Keep Devices in Sync", systemImage: "timer")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    withAnimation(.smooth(duration: 0.4)) { model.autoSync() }
-                } label: {
-                    Label("Auto-Sync", systemImage: "wand.and.stars")
-                }
-                .disabled(!model.isGroupActive)
-            }
-            Text("Bluetooth headphones play a little later than wired speakers, so mixing them can sound like an echo. Auto-Sync delays the faster devices to match the slowest. If something still sounds early, raise its delay a few milliseconds at a time.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .glassCard()
-    }
-
-    private var tips: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Your volume keys control the sound output (the device marked Main). Use the sliders above for the others.", systemImage: "speaker.wave.2")
-            Label("Two pairs of AirPods work. If the sound stutters, keep both close to your Mac; Bluetooth bandwidth is shared.", systemImage: "airpods")
-            Label("Choosing a device as the sound output in Control Center makes it the Main device here.", systemImage: "switch.2")
-        }
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 6)
-    }
 }
 
+/// One device: a compact line by default, with volume and delay a click away.
 private struct GroupDeviceRow: View {
     @EnvironmentObject private var model: SoundModel
     @EnvironmentObject private var battery: BatteryMonitor
     let device: OutputDevice
 
+    @State private var isExpanded = false
     @State private var volume: Float = 0
     @State private var hasVolume = false
 
     var body: some View {
         let profile = model.profile(for: device)
-        let tint = profile?.tint ?? DeviceKind.other.tint
         let isMain = device.uid == model.currentOutput?.uid
         let isMember = model.isInGroup(device)
-        let route = model.route(for: device)
         let playing = isMember && model.isGroupActive
 
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
                 Button {
                     withAnimation(.smooth(duration: 0.35)) { model.toggleGroupMember(device) }
                 } label: {
                     Image(systemName: isMember ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 22))
-                        .foregroundStyle(isMember ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary))
+                        .font(.system(size: 20))
+                        .foregroundStyle(isMember ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.tertiary))
                         .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.plain)
                 .disabled(isMain || !model.canAddToGroup(device))
                 .help(isMain ? "The sound output always plays" : (isMember ? "Stop playing here" : "Also play here"))
 
-                DeviceBadge(symbol: profile?.symbolName ?? "speaker.wave.2.fill", tint: tint, size: 36, dimmed: !isMember)
+                DeviceBadge(symbol: profile?.symbolName ?? "speaker.wave.2.fill", size: 32, dimmed: !isMember)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(device.name).font(.headline).lineLimit(1)
-                        if isMain {
-                            Text("MAIN")
-                                .font(.caption2.weight(.bold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(tint.opacity(0.18)))
-                                .foregroundStyle(tint)
-                        }
+                        if isMain { Tag(text: "MAIN") }
                     }
-                    HStack(spacing: 10) {
-                        Text(eqSummary(profile))
-                        if let info = battery.battery(for: device.name) {
-                            BatteryLabel(info: info)
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    Text(subtitle(profile))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
 
                 Spacer(minLength: 8)
 
-                if playing, let route {
-                    LevelMeter(processor: model.engine.processor, route: route, tint: tint, isActive: true, height: 28)
-                        .transition(.opacity)
+                if playing, let route = model.route(for: device) {
+                    LevelMeter(processor: model.engine.processor, route: route, tint: Theme.accent, isActive: true, height: 24)
                 }
 
-                if isMember && !isMain {
-                    Button("Make Main") { model.playThrough(device) }
-                        .controlSize(.small)
-                        .help("Make this the Mac’s sound output")
-                }
-                if let profile {
-                    Button {
-                        model.selectedProfileID = profile.id
+                if playing {
+                    Menu {
+                        Picker("Plays", selection: Binding(
+                            get: { model.role(for: device) },
+                            set: { role in withAnimation(.smooth) { model.setRole(role, for: device) } }
+                        )) {
+                            ForEach(SpeakerRole.allCases) { role in
+                                Label(role.title, systemImage: role.symbolName).tag(role)
+                            }
+                        }
+                        .pickerStyle(.inline)
                     } label: {
-                        Label("EQ", systemImage: "slider.vertical.3")
+                        Label(model.role(for: device).title, systemImage: model.role(for: device).symbolName)
                     }
-                    .controlSize(.small)
-                    .help("Edit this device’s EQ")
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help(model.role(for: device).detail)
+                }
+
+                if isMember {
+                    Button {
+                        withAnimation(.smooth(duration: 0.3)) { isExpanded.toggle() }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(isExpanded ? "Hide options" : "Volume, delay and more")
                 }
             }
 
-            if isMember {
-                HStack(spacing: 22) {
+            if isMember && isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
                     if hasVolume {
-                        HStack(spacing: 8) {
-                            Image(systemName: "speaker.fill").foregroundStyle(.secondary)
+                        OptionRow(title: "Volume", symbol: "speaker.wave.2") {
                             Slider(value: Binding(
                                 get: { Double(volume) },
                                 set: { volume = Float($0); HAL.setVolume(device.id, Float($0)) }
                             ), in: 0...1)
-                            Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
+                            Text(Format.percent(Double(volume)))
+                                .font(.callout.monospacedDigit())
+                                .frame(width: 48, alignment: .trailing)
                         }
-                        .frame(maxWidth: .infinity)
                     } else {
-                        Text("Use this device’s own volume controls.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        OptionRow(title: "Volume", symbol: "speaker.wave.2") {
+                            Text("Use this device’s own volume buttons.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
                     }
-                    HStack(spacing: 8) {
-                        Image(systemName: "timer").foregroundStyle(.secondary)
+                    OptionRow(title: "Delay", symbol: "timer") {
                         Slider(value: Binding(
                             get: { model.delay(for: device) },
                             set: { model.setDelay($0, for: device) }
                         ), in: 0...500, step: 5)
                         Text(String(format: "%.0f ms", model.delay(for: device)))
                             .font(.callout.monospacedDigit())
-                            .frame(width: 56, alignment: .trailing)
-                            .contentTransition(.numericText(value: model.delay(for: device)))
+                            .frame(width: 48, alignment: .trailing)
                     }
-                    .frame(maxWidth: .infinity)
-                    .help("Delay this device so it lines up with the others")
-                }
-                .padding(.leading, 36)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-
-                if model.isGroupActive {
-                    let role = model.role(for: device)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Picker("Plays", selection: Binding(
-                            get: { model.role(for: device) },
-                            set: { newRole in withAnimation(.smooth(duration: 0.3)) { model.setRole(newRole, for: device) } }
-                        )) {
-                            ForEach(SpeakerRole.allCases) { role in
-                                Label(role.title, systemImage: role.symbolName).tag(role)
-                            }
+                    HStack(spacing: 10) {
+                        if !isMain {
+                            Button("Make Main") { model.playThrough(device) }
                         }
-                        .pickerStyle(.segmented)
-                        Text(role.detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .contentTransition(.opacity)
+                        if let profile {
+                            Button("Edit EQ") { model.selectedProfileID = profile.id }
+                        }
+                        Spacer()
+                        if playing {
+                            Text(model.role(for: device).detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .frame(maxWidth: 360, alignment: .trailing)
+                        }
                     }
-                    .padding(.leading, 36)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .controlSize(.small)
                 }
+                .padding(.leading, 44)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(16)
-        .glassSurface(cornerRadius: 20, tint: isMember ? tint : nil)
-        .tint(tint)
+        .padding(14)
+        .glassSurface(cornerRadius: 18, tint: isMember ? Theme.accent : nil)
         .onAppear(perform: readVolume)
-        .onChange(of: isMember) { _, _ in readVolume() }
+        .onChange(of: isMember) { _, member in
+            readVolume()
+            if !member { isExpanded = false }
+        }
     }
 
     private func readVolume() {
@@ -326,10 +255,32 @@ private struct GroupDeviceRow: View {
         volume = HAL.volume(device.id) ?? 0
     }
 
-    private func eqSummary(_ profile: DeviceProfile?) -> String {
-        guard let profile else { return "Flat" }
-        if !profile.isEnabled { return "EQ off" }
-        if profile.isFlat { return "Flat" }
-        return "EQ: \(profile.presetName)"
+    private func subtitle(_ profile: DeviceProfile?) -> String {
+        var parts: [String] = []
+        if let profile {
+            if !profile.isEnabled || profile.isFlat { parts.append("No EQ") } else { parts.append(profile.presetName) }
+        }
+        if model.isInGroup(device), model.isGroupActive, model.delay(for: device) > 0 {
+            parts.append("\(Int(model.delay(for: device))) ms delay")
+        }
+        if let level = battery.battery(for: device.name)?.headline {
+            parts.append("\(level)% battery")
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct OptionRow<Content: View>: View {
+    let title: String
+    let symbol: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Label(title, systemImage: symbol)
+                .foregroundStyle(.secondary)
+                .frame(width: 90, alignment: .leading)
+            content
+        }
     }
 }

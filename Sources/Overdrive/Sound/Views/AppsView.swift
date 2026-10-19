@@ -47,14 +47,6 @@ struct AppsView: View {
                         savedRules
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Turn EQ off for FaceTime, Zoom or Teams so voices on calls sound natural.", systemImage: "phone")
-                        Label("Apps set to skip the EQ still play on every Multi-Output device, unchanged.", systemImage: "hifispeaker.2")
-                        Label("Changing an app for the first time briefly restarts Overdrive’s audio.", systemImage: "info.circle")
-                    }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
                 }
             }
             .padding(24)
@@ -79,6 +71,13 @@ struct AppsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
+            InfoButton("""
+            Turn EQ off for FaceTime, Zoom or Teams so voices on calls sound natural.
+
+            Apps that skip the EQ still play on every Multi-Output device.
+
+            Changing an app for the first time briefly restarts Overdrive’s audio.
+            """)
         }
         .padding(20)
         .glassSurface(cornerRadius: 26, tint: .appSound)

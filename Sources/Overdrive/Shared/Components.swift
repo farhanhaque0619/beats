@@ -34,19 +34,22 @@ extension PageHeader where Accessory == EmptyView {
     }
 }
 
-/// A titled glass card.
+/// A titled glass card. `info` adds an ⓘ button that explains the card in a popover,
+/// so the explanation is there when wanted without crowding the page.
 struct Card<Content: View, Trailing: View>: View {
     let title: String
     let symbol: String
+    var info: String? = nil
     @ViewBuilder var trailing: Trailing
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Label(title, systemImage: symbol)
                     .font(.headline)
                     .foregroundStyle(.secondary)
+                if let info { InfoButton(info) }
                 Spacer(minLength: 8)
                 trailing
             }
@@ -57,8 +60,116 @@ struct Card<Content: View, Trailing: View>: View {
 }
 
 extension Card where Trailing == EmptyView {
-    init(title: String, symbol: String, @ViewBuilder content: () -> Content) {
-        self.init(title: title, symbol: symbol, trailing: { EmptyView() }, content: content)
+    init(title: String, symbol: String, info: String? = nil, @ViewBuilder content: () -> Content) {
+        self.init(title: title, symbol: symbol, info: info, trailing: { EmptyView() }, content: content)
+    }
+}
+
+/// A small ⓘ that shows an explanation in a popover.
+struct InfoButton: View {
+    let text: String
+    @State private var isShown = false
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Button {
+            isShown.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("What does this mean?")
+        .popover(isPresented: $isShown, arrowEdge: .bottom) {
+            Text(text)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 300, alignment: .leading)
+                .padding(16)
+        }
+    }
+}
+
+/// A card whose body folds away, for detail most people don't need every time.
+struct DisclosureCard<Content: View>: View {
+    let title: String
+    let symbol: String
+    let summary: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button {
+                withAnimation(.smooth(duration: 0.3)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Label(title, systemImage: symbol)
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Text(summary)
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                content
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .glassCard()
+        .clipped()
+    }
+}
+
+/// A larger line chart with a light scale, for detail pages.
+struct HistoryChart: View {
+    let values: [Double]
+    let maximum: Double
+    let topLabel: String
+    var bottomLabel = "0"
+    var caption = "Last 3 minutes"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack {
+                    Text(topLabel)
+                    Spacer()
+                    Text(bottomLabel)
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: 34, alignment: .trailing)
+
+                ZStack {
+                    VStack {
+                        Divider().opacity(0.5)
+                        Spacer()
+                        Divider().opacity(0.3)
+                        Spacer()
+                        Divider().opacity(0.5)
+                    }
+                    Sparkline(values: values, maximum: maximum)
+                }
+            }
+            .frame(height: 130)
+            Text(values.count < 4 ? "Collecting…" : caption)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.leading, 42)
+        }
     }
 }
 

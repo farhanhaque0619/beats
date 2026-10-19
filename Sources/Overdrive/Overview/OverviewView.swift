@@ -12,6 +12,8 @@ struct OverviewView: View {
         PageScroll {
             PageHeader(symbol: "square.grid.2x2", title: greeting, subtitle: "\(monitor.machine.chip) · \(monitor.machine.osVersion)")
 
+            HealthStrip()
+
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 380), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) {
                 soundTile
                 systemTile
@@ -73,10 +75,10 @@ struct OverviewView: View {
         let s = monitor.snapshot
         return Tile(title: "System", symbol: "gauge.with.dots.needle.50percent", open: { sound.selectedProfileID = Page.performance }) {
             HStack(spacing: 14) {
-                RingGauge(value: s.cpu, label: "CPU", detail: Format.percent(s.cpu), size: 76)
-                RingGauge(value: s.memoryFraction, label: "Memory", detail: Format.percent(s.memoryFraction), size: 76)
-                RingGauge(value: s.gpu ?? 0, label: "GPU", detail: s.gpu.map(Format.percent) ?? "—", size: 76)
-                RingGauge(value: min((s.cpuTemperature ?? 0) / 100, 1), label: "Temp", detail: Format.temperature(s.cpuTemperature), size: 76)
+                ringButton(.cpu, RingGauge(value: s.cpu, label: "CPU", detail: Format.percent(s.cpu), size: 76))
+                ringButton(.memory, RingGauge(value: s.memoryFraction, label: "Memory", detail: Format.percent(s.memoryFraction), size: 76))
+                ringButton(.gpu, RingGauge(value: s.gpu ?? 0, label: "GPU", detail: s.gpu.map(Format.percent) ?? "—", size: 76))
+                ringButton(.temperature, RingGauge(value: min((s.cpuTemperature ?? 0) / 100, 1), label: "Temp", detail: Format.temperature(s.cpuTemperature), size: 76))
             }
             .frame(maxWidth: .infinity)
             HStack {
@@ -93,6 +95,17 @@ struct OverviewView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+    }
+
+    private func ringButton(_ metric: Metric, _ gauge: RingGauge) -> some View {
+        Button {
+            sound.selectedProfileID = Page.performance
+            monitor.focusedMetric = metric
+        } label: {
+            gauge
+        }
+        .buttonStyle(.plain)
+        .help("Open \(metric.title)")
     }
 
     private var displayTile: some View {
@@ -202,6 +215,52 @@ private struct Tile<Content: View>: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
+        .glassSurface(cornerRadius: 22)
+    }
+}
+
+/// One line that says whether anything needs attention, with a chip per vital sign.
+/// Clicking a chip opens its detail page.
+private struct HealthStrip: View {
+    @EnvironmentObject private var sound: SoundModel
+    @EnvironmentObject private var monitor: SystemMonitor
+
+    private let metrics: [Metric] = [.cpu, .memory, .temperature, .power, .storage]
+
+    var body: some View {
+        let attention = metrics.filter { monitor.reading($0).health != .good }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: attention.isEmpty ? "checkmark.seal.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(attention.isEmpty ? Color.green : Color.orange)
+                Text(attention.isEmpty ? "Everything looks good" : "\(attention.count) thing\(attention.count == 1 ? "" : "s") worth a look")
+                    .font(.headline)
+            }
+            FlowLayout(spacing: 8) {
+                ForEach(metrics) { metric in
+                    let reading = monitor.reading(metric)
+                    Button {
+                        sound.selectedProfileID = Page.performance
+                        monitor.focusedMetric = metric
+                    } label: {
+                        HStack(spacing: 6) {
+                            Circle().fill(reading.health.color).frame(width: 7, height: 7)
+                            Text(reading.chip)
+                                .font(.callout)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 6)
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .glassSurface(cornerRadius: 100, interactive: true)
+                    .help("Open \(metric.title)")
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .glassSurface(cornerRadius: 22)
     }
 }

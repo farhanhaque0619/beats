@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ProfileDetailView: View {
     @EnvironmentObject private var model: SoundModel
+    @AppStorage("soundShowFineTune") private var showFineTune = false
     let profileID: String
 
     var body: some View {
@@ -15,22 +16,18 @@ struct ProfileDetailView: View {
                         PresetStrip(profile: profile)
 
                         ResponseCard(profile: profile)
+                        BassBoostCard(profile: profile)
 
-                        VStack(alignment: .leading, spacing: 14) {
-                            CardTitle("Bands", systemImage: "slider.vertical.3")
+                        DisclosureCard(
+                            title: "Fine-Tune",
+                            symbol: "slider.vertical.3",
+                            summary: "10 bands and output level",
+                            isExpanded: $showFineTune
+                        ) {
                             BandSliders(profile: profile)
-                        }
-                        .glassCard()
-
-                        HStack(alignment: .top, spacing: 16) {
-                            BassBoostCard(profile: profile)
+                            Divider().padding(.vertical, 4)
                             OutputCard(profile: profile)
                         }
-
-                        Label(profile.kind.tip, systemImage: "lightbulb")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
                     }
                     .opacity(profile.isEnabled ? 1 : 0.55)
                     .saturation(profile.isEnabled ? 1 : 0.3)
@@ -86,10 +83,13 @@ private struct DeviceHeader: View {
                 .shadow(color: .black.opacity(0.08), radius: 6, y: 3)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(profile.displayName)
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                HStack(spacing: 8) {
+                    Text(profile.displayName)
+                        .font(.system(size: 30, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    InfoButton(profile.kind.tip)
+                }
                 HStack(spacing: 8) {
                     StatusPill(status: status)
                     if let info = battery.battery(for: model.device(for: profile)?.name) {
@@ -256,7 +256,7 @@ private struct ResponseCard: View {
                 onBandChange: { band, gain in model.setGain(gain, band: band, for: profile.id) }
             )
             .frame(height: 230)
-            Text("Drag the points on the curve, or use the faders below.")
+            Text("Drag the points on the curve to shape the sound.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
@@ -453,15 +453,10 @@ private struct BassBoostCard: View {
     let profile: DeviceProfile
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                CardTitle("Bass Boost", systemImage: "dial.high")
-                Spacer()
-                Text(profile.bassBoost < 0.05 ? "Off" : String(format: "+%.1f dB", profile.bassBoost))
-                    .font(.title3.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(profile.bassBoost < 0.05 ? Color.secondary : profile.tint)
-                    .contentTransition(.numericText(value: profile.bassBoost))
-            }
+        HStack(spacing: 14) {
+            CardTitle("Bass Boost", systemImage: "dial.high")
+                .fixedSize()
+            InfoButton("A smooth extra lift below 110 Hz, added on top of the preset. The quickest way to get more bass without touching the bands.")
             Slider(
                 value: model.binding(profile.id, \.bassBoost, fallback: 0),
                 in: EQBands.bassBoostRange,
@@ -474,9 +469,11 @@ private struct BassBoostCard: View {
                 Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
             }
             .labelsHidden()
-            Text("Extra low end under 110 Hz, on top of the bands.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            Text(profile.bassBoost < 0.05 ? "Off" : String(format: "+%.1f dB", profile.bassBoost))
+                .font(.body.monospacedDigit().weight(.semibold))
+                .foregroundStyle(profile.bassBoost < 0.05 ? Color.secondary : profile.tint)
+                .frame(width: 70, alignment: .trailing)
+                .contentTransition(.numericText(value: profile.bassBoost))
         }
         .glassCard()
     }
@@ -523,6 +520,5 @@ private struct OutputCard: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .glassCard()
     }
 }

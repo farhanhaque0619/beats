@@ -3,6 +3,10 @@ name: Build Mac App
 on:
   push:
     branches: ["**"]
+    # Ink (the email app) has its own workflow; changes to it don't rebuild Overdrive.
+    paths-ignore:
+      - "Ink/**"
+      - ".github/workflows/ink.yml"
   workflow_dispatch:
 
 permissions:

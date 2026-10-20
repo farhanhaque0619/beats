@@ -5,6 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/xcodebuild-helper.sh
+ink_overrides
 mkdir -p build/screenshots
 
 BUNDLE_ID=$(xcodebuild -project Ink.xcodeproj -scheme Ink-iOS -showBuildSettings 2>/dev/null | awk -F' = ' '/ PRODUCT_BUNDLE_IDENTIFIER =/{print $2; exit}')
@@ -18,7 +19,7 @@ run_xcodebuild sim-build \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath build/DerivedData-sim \
   CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
-  build
+  ${OVERRIDES[@]+"${OVERRIDES[@]}"} build
 APP=build/DerivedData-sim/Build/Products/Release-iphonesimulator/Ink.app
 
 # Newest "iPhone NN Pro" simulator available, else any iPhone.

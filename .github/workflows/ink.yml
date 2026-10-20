@@ -41,6 +41,10 @@ jobs:
     name: iPhone + Mac builds
     runs-on: macos-15
     timeout-minutes: 60
+    env:
+      # Optional, from repo Settings › Secrets and variables › Actions › Variables (see Ink/docs/ACCOUNTS.md).
+      INK_GOOGLE_CLIENT_ID: ${{ vars.INK_GOOGLE_CLIENT_ID }}
+      INK_MICROSOFT_CLIENT_ID: ${{ vars.INK_MICROSOFT_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -148,6 +152,8 @@ jobs:
           printf '%s' "$ASC_KEY_P8" > "$KEY_PATH"
           EXTRA=()
           if [ -n "$BUNDLE_ID" ]; then EXTRA+=("INK_BUNDLE_ID=$BUNDLE_ID"); fi
+          if [ -n "${{ vars.INK_GOOGLE_CLIENT_ID }}" ]; then EXTRA+=("INK_GOOGLE_CLIENT_ID=${{ vars.INK_GOOGLE_CLIENT_ID }}"); fi
+          if [ -n "${{ vars.INK_MICROSOFT_CLIENT_ID }}" ]; then EXTRA+=("INK_MICROSOFT_CLIENT_ID=${{ vars.INK_MICROSOFT_CLIENT_ID }}"); fi
           AUTH=(-allowProvisioningUpdates
                 -authenticationKeyPath "$KEY_PATH"
                 -authenticationKeyID "$ASC_KEY_ID"

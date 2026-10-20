@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/xcodebuild-helper.sh
+ink_overrides
 
 run_xcodebuild ios-build \
   -project Ink.xcodeproj \
@@ -12,7 +13,7 @@ run_xcodebuild ios-build \
   -destination 'generic/platform=iOS' \
   -derivedDataPath build/DerivedData-ios \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
-  build
+  ${OVERRIDES[@]+"${OVERRIDES[@]}"} build
 
 rm -rf build/ipa && mkdir -p build/ipa/Payload
 cp -R build/DerivedData-ios/Build/Products/Release-iphoneos/Ink.app build/ipa/Payload/

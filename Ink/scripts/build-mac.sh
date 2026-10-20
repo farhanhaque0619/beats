@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/xcodebuild-helper.sh
+ink_overrides
 
 rm -rf build/Ink.app
 run_xcodebuild mac-build \
@@ -14,7 +15,7 @@ run_xcodebuild mac-build \
   -derivedDataPath build/DerivedData \
   ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
-  build
+  ${OVERRIDES[@]+"${OVERRIDES[@]}"} build
 
 cp -R build/DerivedData/Build/Products/Release/Ink.app build/Ink.app
 codesign --verify --verbose build/Ink.app

@@ -18,3 +18,15 @@ run_xcodebuild() {
   grep -E "error:|fatal error|Undefined symbol|ld: " "$log" | sed -E 's|^.*/Ink/|Ink/|' | sort -u | head -150
   return 1
 }
+
+# Build settings passed through from the environment when set (CI sets them from repository
+# variables): OAuth client IDs and the bundle ID. Unset ones are left to the xcconfig files.
+# Fills the OVERRIDES array. (macOS ships bash 3.2: no mapfile, and empty arrays need care
+# under `set -u`, hence ${OVERRIDES[@]+"${OVERRIDES[@]}"} at the call sites.)
+ink_overrides() {
+  OVERRIDES=()
+  local v
+  for v in INK_GOOGLE_CLIENT_ID INK_MICROSOFT_CLIENT_ID INK_BUNDLE_ID; do
+    if [ -n "${!v:-}" ]; then OVERRIDES+=("$v=${!v}"); fi
+  done
+}

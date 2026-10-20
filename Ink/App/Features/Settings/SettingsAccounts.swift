@@ -67,6 +67,8 @@ struct SettingsAccountsSection: View {
                     confirmsDemoRemoval = true
                 } label: {
                     Label("Remove demo inbox", systemImage: "trash")
+                        // The icon would otherwise take the accent while the words are red.
+                        .foregroundStyle(Ink.danger)
                 }
                 .confirmationDialog("Remove the demo inbox?", isPresented: $confirmsDemoRemoval, titleVisibility: .visible) {
                     Button("Remove demo inbox", role: .destructive, action: removeDemo)
@@ -260,12 +262,16 @@ struct SettingsAccountDetail: View {
         guard !isRemoving else { return }
         isRemoving = true
         let id = accountID
+        let store = self.store
+        let onRemoved = self.onRemoved
+        #if os(iOS)
+        // Back to the list first: removing the account takes away the row this screen was
+        // pushed from, and dismissing from a screen that's already gone can close Settings.
+        dismiss()
+        #endif
         Task {
             await store.removeAccount(id: id)
             Haptics.success()
-            #if os(iOS)
-            dismiss()
-            #endif
             onRemoved()
         }
     }

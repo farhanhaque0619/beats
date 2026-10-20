@@ -89,9 +89,11 @@ struct OnboardingProvider {
         pageButtonTitle: "Open App passwords",
         notes: [
             "IMAP is always on for Gmail, so there's nothing to switch on.",
+            "No App passwords page? 2-Step Verification is off or uses only security keys, or it's a work or school account whose admin turned them off.",
+            "Accounts in Google's Advanced Protection Program can't use app passwords, so Ink can't connect to them.",
             "Changing your Google password cancels app passwords. Just make a new one.",
         ],
-        authFailureHint: "Gmail only lets mail apps in with an app password, not your Google password. Make one at myaccount.google.com/apppasswords (it needs 2-Step Verification).",
+        authFailureHint: "Gmail only lets mail apps in with an app password, not your Google password. Make one at myaccount.google.com/apppasswords (it needs 2-Step Verification). An app password stops working after a Google password change.",
         connectionHint: reachHint
     )
 
@@ -116,10 +118,10 @@ struct OnboardingProvider {
         pageURL: URL(string: "https://account.apple.com"),
         pageButtonTitle: "Open Apple Account",
         notes: [
-            "Use your iCloud address (…@icloud.com, @me.com or @mac.com).",
+            "Use your primary iCloud Mail address (…@icloud.com, @me.com or @mac.com), even if you send from an alias or your own domain.",
             "Changing your Apple Account password cancels app-specific passwords.",
         ],
-        authFailureHint: "iCloud needs an app-specific password, not your Apple Account password. Create one at account.apple.com under Sign-In and Security.",
+        authFailureHint: "iCloud needs an app-specific password, not your Apple Account password, and your primary iCloud Mail address. Create the password at account.apple.com under Sign-In and Security.",
         connectionHint: reachHint
     )
 
@@ -143,7 +145,9 @@ struct OnboardingProvider {
         ],
         pageURL: URL(string: "https://outlook.live.com/mail/"),
         pageButtonTitle: "Open Outlook.com",
-        notes: [],
+        notes: [
+            "On a new account the IMAP switch can turn itself off again during the first day. If Ink stops connecting, check it, and confirm “This was me” at account.live.com/activity if Microsoft asks.",
+        ],
         authFailureHint: "Microsoft didn't let Ink in. Check that IMAP is on in Outlook.com (Settings, Mail, Forwarding and IMAP), then sign in again.",
         connectionHint: reachHint
     )
@@ -169,10 +173,11 @@ struct OnboardingProvider {
         pageURL: URL(string: "https://login.yahoo.com/account/security"),
         pageButtonTitle: "Open Account Security",
         notes: [
-            "Yahoo sometimes refuses to make an app password for an account. If that happens, Ink can't connect to it.",
-            "Yahoo doesn't push new mail, so Ink checks when you open or refresh.",
+            "Yahoo's app passwords are hit and miss: some accounts can't make one. If yours can't, Ink can't connect to it.",
+            "Make the app password in a browser you often use for Yahoo, not a private window.",
+            "Several wrong passwords in a row can lock mail apps out for about an hour.",
         ],
-        authFailureHint: "Yahoo needs an app password, not your Yahoo password. Generate one in Account Security.",
+        authFailureHint: "Yahoo needs an app password, not your Yahoo password. Generate one in Account Security. After a few failed tries Yahoo may block mail apps for about an hour.",
         connectionHint: reachHint
     )
 
@@ -196,7 +201,9 @@ struct OnboardingProvider {
         ],
         pageURL: URL(string: "https://login.aol.com/account/security"),
         pageButtonTitle: "Open Account Security",
-        notes: [],
+        notes: [
+            "Make the app password in a browser you often use for AOL, not a private window.",
+        ],
         authFailureHint: "AOL needs an app password, not your AOL password. Generate one in Account Security.",
         connectionHint: reachHint
     )
@@ -360,6 +367,19 @@ struct OnboardingFailure: Equatable {
 
     init(error: Error, provider: OnboardingProvider) {
         let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        let lowered = description.lowercased()
+        if lowered.contains("authenticated but not connected") {
+            // Outlook.com signs you in, then refuses IMAP while the account's IMAP switch is off.
+            self.init(
+                message: "Signed in, but IMAP is off for this account.",
+                hint: "In Outlook.com open Settings, Mail, Forwarding and IMAP, turn on “Let devices and apps use IMAP”, save, then try again."
+            )
+            return
+        }
+        if lowered.contains("5.7.139") {
+            self.init(message: description, hint: "Your organisation has turned off sending from mail apps (SMTP AUTH). Ask your administrator to allow it.")
+            return
+        }
         guard let mailError = error as? MailError else {
             self.init(message: description, hint: provider.connectionHint.isEmpty ? nil : provider.connectionHint)
             return

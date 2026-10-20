@@ -1,6 +1,11 @@
 import SwiftUI
 import Observation
 import InkCore
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 /// Scenes the app can open straight into for automated screenshots
 /// (`-InkScreenshot <scene>` launch argument). They always use the in-memory demo store.
@@ -45,10 +50,15 @@ final class AppModel {
     var isAddAccountPresented = false
     var isCommandPalettePresented = false
 
+    /// False until accounts and cached mail have been read from disk. Until then RootView shows
+    /// the plain launch background, so a returning user never sees the welcome screen flash by.
+    private(set) var isReady = false
+
     init(store: MailStore, settings: AppSettings, screenshot: ScreenshotScene? = nil) {
         self.store = store
         self.settings = settings
         self.screenshot = screenshot
+        self.isReady = screenshot != nil
     }
 
     /// The real app: Keychain, Application Support, live connections. Or the demo store when
@@ -74,7 +84,7 @@ final class AppModel {
         #endif
         let model = AppModel(store: store, settings: settings)
         // Tapping a new-mail notification opens that conversation.
-        Notifier.routeTaps { [weak model] conversationID in model?.open(conversationID) }
+        Notifier.routeTaps { [weak model] target in model?.openNotification(target) }
         return model
     }
 
@@ -88,6 +98,13 @@ final class AppModel {
     }
 
     @ObservationIgnored private var started = false
+    /// Set when the app goes to the background; the next activation catches up.
+    @ObservationIgnored private var isInBackground = false
+    /// Where "go to the next conversation" lands after the open thread leaves the list, worked
+    /// out before it leaves (afterwards there's nothing to count from).
+    @ObservationIgnored private var advanceTarget: (leavingID: String, nextID: String?)?
+    /// Mac only: the loop behind new-mail notifications.
+    @ObservationIgnored private var newMailWatch: Task<Void, Never>?
 
     /// Loads mail. Called from the root view; only the first call does anything.
     func start() async {
@@ -95,7 +112,14 @@ final class AppModel {
         started = true
         settings.apply(to: store)
         await store.load()
+        isReady = true
         store.startLiveUpdates()
+        #if os(iOS)
+        // Launched in the background for a refresh earlier: what that run loaded may be hours old.
+        if BackgroundRefresh.didRunThisLaunch { Task { await store.refresh() } }
+        #elseif os(macOS)
+        startNewMailWatch()
+        #endif
     }
 
     // MARK: Actions
@@ -125,7 +149,10 @@ final class AppModel {
             isSnoozePickerPresented = true
             return
         }
-        if action.removesFromList { moveSelectionPast(conversations) }
+        if action.removesFromList {
+            rememberNeighbour(leaving: conversations)
+            moveSelectionPast(conversations)
+        }
         store.perform(action, on: conversations)
     }
 
@@ -134,6 +161,7 @@ final class AppModel {
         isSnoozePickerPresented = false
         snoozeTargets = []
         guard !targets.isEmpty else { return }
+        rememberNeighbour(leaving: targets)
         moveSelectionPast(targets)
         store.snooze(targets, until: date)
     }
@@ -164,49 +192,147 @@ final class AppModel {
     /// After archiving from the reader, either advance (setting) or go back to the list.
     func didRemoveFocusedConversation(_ id: String) {
         #if os(iOS)
-        if settings.advanceToNext, let next = conversation(after: id, offset: 1) {
-            phonePath = [next.id]
+        let remembered = advanceTarget?.leavingID == id ? advanceTarget : nil
+        advanceTarget = nil
+        let nextID: String?
+        if let remembered {
+            nextID = remembered.nextID
+        } else if store.conversations.contains(where: { $0.id == id }) {
+            nextID = conversation(after: id, offset: 1)?.id
+        } else {
+            // Gone already and nobody noted its neighbour: the list is the safe place to land.
+            nextID = nil
+        }
+        if settings.advanceToNext, let nextID, nextID != id {
+            phonePath = [nextID]
         } else if phonePath.last == id {
             phonePath.removeLast()
         }
         #endif
     }
 
+    /// A tapped new-mail notification. On a cold launch it waits for mail to load, then clears
+    /// whatever covers the list (search, the mailbox switcher, Settings) and opens the
+    /// conversation. Compose stays put so nothing being written is lost.
+    func openNotification(_ target: MailNotificationTarget) {
+        guard screenshot == nil else { return }
+        Task {
+            await store.load()
+            guard let conversation = Notifier.conversation(for: target, in: store) else { return }
+            isSearchPresented = false
+            isMailboxSwitcherPresented = false
+            isCommandPalettePresented = false
+            #if os(iOS)
+            isSettingsPresented = false
+            #endif
+            open(conversation.id)
+        }
+    }
+
     /// `mailto:` links from messages open Compose.
     func handleOpenURL(_ url: URL) {
         guard url.scheme?.lowercased() == "mailto" else { return }
+        // Never replace a message that's being written.
+        guard composeDraft == nil else {
+            store.showToast(Toast(message: "Finish or close the message you're writing first.", systemImage: "square.and.pencil"))
+            return
+        }
         var draft = store.newDraft(accountID: store.scope.accountID)
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        let to = (components?.path ?? "").removingPercentEncoding ?? ""
-        draft.to = to.split(separator: ",").map { EmailAddress(address: String($0)) }.filter(\.isValid)
+        var to = Self.addresses(in: components?.path ?? "")
+        var body: String?
         for item in components?.queryItems ?? [] {
+            let value = item.value ?? ""
             switch item.name.lowercased() {
-            case "subject": draft.subject = item.value ?? ""
-            case "body": draft.body = item.value ?? ""
-            case "cc": draft.cc = (item.value ?? "").split(separator: ",").map { EmailAddress(address: String($0)) }
-            case "bcc": draft.bcc = (item.value ?? "").split(separator: ",").map { EmailAddress(address: String($0)) }
+            case "to": to += Self.addresses(in: value)
+            case "subject": draft.subject = value
+            case "body": body = value
+            case "cc": draft.cc = Self.addresses(in: value)
+            case "bcc": draft.bcc = Self.addresses(in: value)
             default: break
             }
         }
+        draft.to = to
+        // The new draft's body is the signature block; the link's text goes above it.
+        if let body, !body.isEmpty { draft.body = body + draft.body }
         composeDraft = draft
+    }
+
+    /// Valid addresses from a comma-separated `mailto:` list.
+    private static func addresses(in list: String) -> [EmailAddress] {
+        list.split(separator: ",")
+            .map { EmailAddress(address: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter(\.isValid)
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
         guard screenshot == nil else { return }
         switch phase {
         case .active:
-            store.startLiveUpdates()
-            Task { await store.refresh() }
+            let returning = isInBackground
+            isInBackground = false
+            // The first activation is `start()`'s job.
+            guard started else { return }
+            if returning {
+                store.startLiveUpdates()
+                Task {
+                    await store.refresh()
+                    if settings.notificationsEnabled { Notifier.withdrawRead(store: store) }
+                }
+            } else {
+                // iPhone: inactive → active (Control Center, the app switcher, an alert) has nothing
+                // to catch up on. Mac: switching back to Ink refreshes only if it's been a while;
+                // the inbox stays live over IDLE meanwhile.
+                #if os(macOS)
+                if let last = store.lastSyncedAt, Date().timeIntervalSince(last) < 120 { return }
+                Task { await store.refresh() }
+                #endif
+            }
         case .background:
+            guard !isInBackground else { return }
+            isInBackground = true
             store.stopLiveUpdates()
-            Task { await store.flushPendingActions() }
+            flushBeforeSuspension()
+            if settings.notificationsEnabled { Notifier.withdrawRead(store: store) }
             Notifier.updateBadge(count: settings.notificationsEnabled ? store.unreadCount(for: .allInboxes) : 0)
             #if os(iOS)
-            BackgroundRefresh.schedule()
+            BackgroundRefresh.noteLeftForeground()
+            if BackgroundRefresh.hasRealAccounts(store) { BackgroundRefresh.schedule() }
             #endif
         default:
             break
         }
+    }
+
+    /// Sends what's waiting out its Undo window and commits pending triage. On iPhone this asks
+    /// for background time first: without it iOS suspends Ink within seconds and a message sent
+    /// just before leaving would sit in the outbox until the next launch.
+    private func flushBeforeSuspension() {
+        #if os(iOS)
+        let backgroundTime = BackgroundTime(name: "Send and save mail")
+        Task {
+            await store.flushPendingActions()
+            backgroundTime.end()
+        }
+        #else
+        Task { await store.flushPendingActions() }
+        #endif
+    }
+
+    /// Notes where to go next if the open thread is among `removed` (iPhone).
+    private func rememberNeighbour(leaving removed: [Conversation]) {
+        #if os(iOS)
+        let ids = Set(removed.map(\.id))
+        guard let focused = phonePath.last, ids.contains(focused) else { return }
+        let list = store.conversations
+        guard let index = list.firstIndex(where: { $0.id == focused }) else {
+            advanceTarget = (leavingID: focused, nextID: nil)
+            return
+        }
+        let after = list[(index + 1)...].first { !ids.contains($0.id) }
+        let before = list[..<index].last { !ids.contains($0.id) }
+        advanceTarget = (leavingID: focused, nextID: (after ?? before)?.id)
+        #endif
     }
 
     /// Keeps the Mac selection on a neighbour when the selected conversation leaves the list.
@@ -222,6 +348,48 @@ final class AppModel {
         }
         #endif
     }
+
+    // MARK: Mac new-mail notifications
+
+    #if os(macOS)
+    /// Checks at least this often while Ink isn't the active app.
+    private static let newMailCheckInterval: TimeInterval = 5 * 60
+
+    /// The Mac has no background refresh, but Ink keeps running behind other apps and with its
+    /// window closed. While it isn't the active app, check the inboxes every few minutes (within
+    /// half a minute when the live connection brings in unread mail) and announce mail that
+    /// arrived since you last looked.
+    private func startNewMailWatch() {
+        guard newMailWatch == nil else { return }
+        newMailWatch = Task { [weak self] in
+            var lastActive = Date()
+            var lastCheck = Date()
+            var lastUnread: Int?
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard let self, !Task.isCancelled else { return }
+                let now = Date()
+                if NSApplication.shared.isActive {
+                    lastActive = now
+                    lastUnread = nil
+                    continue
+                }
+                guard self.settings.notificationsEnabled, self.store.hasAccounts else { continue }
+                let unread = self.store.unreadCount(for: .allInboxes)
+                let unreadRose = lastUnread.map { unread > $0 } ?? false
+                lastUnread = unread
+                guard unreadRose || now.timeIntervalSince(lastCheck) >= Self.newMailCheckInterval else { continue }
+                lastCheck = now
+                let arrived = await self.store.refreshAllInboxes()
+                lastUnread = self.store.unreadCount(for: .allInboxes)
+                // Seen while Ink was in front (give or take a check): not news.
+                let cutoff = lastActive.addingTimeInterval(-60)
+                guard !NSApplication.shared.isActive, self.settings.notificationsEnabled else { continue }
+                Notifier.notify(newMessages: arrived.filter { $0.receivedDate > cutoff }, store: self.store)
+            }
+        }
+    }
+    #endif
 
     // MARK: Screenshots
 
@@ -255,3 +423,28 @@ final class AppModel {
         }
     }
 }
+
+#if os(iOS)
+/// Background execution time for finishing work after the app leaves the screen. Ended
+/// explicitly, or by iOS's expiration handler just before the time runs out.
+@MainActor
+private final class BackgroundTime {
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+
+    init(name: String) {
+        identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            // Called on the main thread when the time is up: end it now or iOS ends the app.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.end()
+            }
+        }
+    }
+
+    func end() {
+        guard identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
+        identifier = .invalid
+    }
+}
+#endif

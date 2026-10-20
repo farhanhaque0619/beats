@@ -58,10 +58,21 @@ final class OnboardingConnector {
         self.account = account
         withAnimation(InkMotion.smooth) { phase = .connecting }
 
+        let attempt = generation
         work = Task {
+            var account = account
             do {
-                try await store.verify(account, credential: credential) { step in
-                    Task { @MainActor in self.reach(step) }
+                let firstTry = OnboardingStepRecorder()
+                do {
+                    try await self.verify(account, credential: credential, store: store, attempt: attempt, recorder: firstTry)
+                } catch {
+                    // Apple: iCloud's IMAP user name is usually the name part of the address;
+                    // if the full address is refused at IMAP sign-in, try that before giving up.
+                    guard !Task.isCancelled, firstTry.last == .signingInIMAP,
+                          let retry = Self.iCloudNamePartRetry(for: account, after: error) else { throw error }
+                    account = retry
+                    self.account = retry
+                    try await self.verify(retry, credential: credential, store: store, attempt: attempt, recorder: OnboardingStepRecorder())
                 }
                 try Task.checkCancellation()
                 self.reach(index: self.verificationRowCount)
@@ -76,6 +87,30 @@ final class OnboardingConnector {
                 self.fail(OnboardingFailure(error: error, provider: provider))
             }
         }
+    }
+
+    /// One verification pass. Progress from an attempt that was cancelled or replaced is ignored.
+    private func verify(_ account: AccountConfig, credential: Credential, store: MailStore, attempt: Int,
+                        recorder: OnboardingStepRecorder) async throws {
+        try await store.verify(account, credential: credential) { step in
+            recorder.record(step)
+            Task { @MainActor in
+                guard self.generation == attempt else { return }
+                self.reach(step)
+            }
+        }
+    }
+
+    /// The same iCloud account with the address's name part as the IMAP user name, when the
+    /// full address was just refused at IMAP sign-in.
+    private static func iCloudNamePartRetry(for account: AccountConfig, after error: Error) -> AccountConfig? {
+        guard account.provider == .icloud,
+              let mailError = error as? MailError, case .authenticationFailed = mailError else { return nil }
+        let username = account.imap.username
+        guard username.contains("@"), Providers.icloud.handles(email: username) else { return nil }
+        var retry = account
+        retry.imap.username = EmailAddress(address: username).localPart
+        return retry
     }
 
     /// Stops a connection attempt that hasn't started saving yet.
@@ -140,5 +175,25 @@ final class OnboardingConnector {
         self.failure = failure
         withAnimation(InkMotion.smooth) { phase = .editing }
         Haptics.warning()
+    }
+}
+
+/// The last verification step the service reported, written from its own executor and read
+/// right after it throws, so a failure can be placed (IMAP sign-in or sending) without waiting
+/// for the progress rows to catch up.
+private final class OnboardingStepRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var step: VerificationStep?
+
+    var last: VerificationStep? {
+        lock.lock()
+        defer { lock.unlock() }
+        return step
+    }
+
+    func record(_ step: VerificationStep) {
+        lock.lock()
+        self.step = step
+        lock.unlock()
     }
 }

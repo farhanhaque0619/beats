@@ -89,8 +89,11 @@ enum MacSidebarCatalog {
 }
 
 /// Mac sidebar: smart mailboxes, then a collapsible section per account, then a footer with the
-/// sync status, Add Account and Settings.
+/// sync status, Add Account and Settings. Arrows move between mailboxes; the mail shortcuts
+/// work here too, and j/k hand the keyboard to the list.
 struct MacSidebar: View {
+    var focus: FocusState<MacPane?>.Binding
+
     @Environment(AppModel.self) private var app
     @Environment(MailStore.self) private var store
     @State private var collapsedAccounts: Set<String> = []
@@ -123,6 +126,10 @@ struct MacSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .focused(focus, equals: .sidebar)
+        .macKeyboardShortcuts(app: app, pane: .sidebar, didNavigate: {
+            focus.wrappedValue = .list
+        })
         .safeAreaInset(edge: .bottom, spacing: 0) {
             MacSidebarFooter()
         }

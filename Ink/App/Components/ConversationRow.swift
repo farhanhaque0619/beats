@@ -29,6 +29,12 @@ struct ConversationRowStyle: Equatable {
             showRecipients: scope.role == .sent || scope.role == .drafts
         )
     }
+
+    /// Where the row's text column starts (separators inset to it line up with the row).
+    var textLeadingInset: CGFloat {
+        guard showAvatar else { return InkSpace.gutter }
+        return InkSpace.gutter + (compact ? InkSize.avatarSmall : InkSize.avatar) + InkSpace.m
+    }
 }
 
 /// One conversation in a list. Equatable so SwiftUI skips re-rendering unchanged rows while
@@ -58,8 +64,8 @@ struct ConversationRow: View, Equatable {
         let unread = conversation.isUnread
         HStack(alignment: .top, spacing: InkSpace.m) {
             if style.showAvatar {
-                AvatarView(address: headlinePerson, size: style.compact ? InkSize.avatarSmall : InkSize.avatar)
-                    .padding(.top, 2)
+                AvatarView(address: headlinePerson, size: avatarSize)
+                    .padding(.top, Self.avatarTop)
             }
             VStack(alignment: .leading, spacing: style.compact ? 1 : 3) {
                 HStack(alignment: .firstTextBaseline, spacing: InkSpace.xs) {
@@ -79,6 +85,15 @@ struct ConversationRow: View, Equatable {
                     Spacer(minLength: InkSpace.s)
                     trailingMeta(unread: unread)
                 }
+                .overlay(alignment: .leading) {
+                    // Without avatars the dot sits in the gutter, centred on the sender line at
+                    // any text size.
+                    if unread && !onHighlight && !style.showAvatar {
+                        UnreadDot()
+                            .offset(x: Self.dotInset - InkSpace.gutter)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
                 Text(conversation.subject)
                     .font(unread ? InkFont.subject : InkFont.subjectRead)
                     .foregroundStyle(unread ? primaryText : primaryText.opacity(0.78))
@@ -96,10 +111,11 @@ struct ConversationRow: View, Equatable {
         .padding(.trailing, InkSpace.gutter)
         .padding(.vertical, style.compact ? InkSpace.rowVerticalCompact : InkSpace.rowVertical)
         .overlay(alignment: .topLeading) {
-            if unread && !onHighlight {
+            // With avatars the dot sits in the gutter, centred on the avatar.
+            if unread && !onHighlight && style.showAvatar {
                 UnreadDot()
-                    .padding(.leading, 7)
-                    .padding(.top, unreadDotTop)
+                    .padding(.leading, Self.dotInset)
+                    .padding(.top, avatarDotTop)
                     .transition(.scale.combined(with: .opacity))
             }
         }
@@ -124,10 +140,15 @@ struct ConversationRow: View, Equatable {
                     .foregroundStyle(Ink.star)
             }
             if let snoozedUntil {
-                Label(InkDate.listTimestamp(snoozedUntil), systemImage: "clock")
-                    .labelStyle(.titleAndIcon)
-                    .font(InkFont.meta)
-                    .foregroundStyle(Ink.snooze)
+                // Snoozed: when it comes back, in ink. The clock says why the time is in the future.
+                HStack(spacing: 3) {
+                    Image(systemName: "clock")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(secondaryText)
+                    Text(InkDate.snoozeTimestamp(snoozedUntil))
+                        .font(InkFont.meta)
+                        .foregroundStyle(unread ? primaryText : secondaryText)
+                }
             } else {
                 Text(InkDate.listTimestamp(conversation.date))
                     .font(InkFont.meta)
@@ -137,16 +158,18 @@ struct ConversationRow: View, Equatable {
         .fixedSize()
     }
 
-    /// Lines the unread dot up with the sender line (beside the avatar's centre when shown).
-    private var unreadDotTop: CGFloat {
+    private var avatarSize: CGFloat { style.compact ? InkSize.avatarSmall : InkSize.avatar }
+
+    /// The avatar's nudge down so its centre meets the first two lines of text.
+    private static let avatarTop: CGFloat = 2
+
+    /// The unread dot's leading inset: centred in the row's gutter.
+    private static let dotInset: CGFloat = (InkSpace.gutter - InkSize.unreadDot) / 2
+
+    /// Puts the unread dot's centre exactly on the avatar's centre (it used to sit 2 pt high).
+    private var avatarDotTop: CGFloat {
         let rowPadding: CGFloat = style.compact ? InkSpace.rowVerticalCompact : InkSpace.rowVertical
-        let lineOffset: CGFloat
-        if style.showAvatar {
-            lineOffset = style.compact ? 10 : 16
-        } else {
-            lineOffset = 7
-        }
-        return rowPadding + lineOffset
+        return rowPadding + Self.avatarTop + (avatarSize - InkSize.unreadDot) / 2
     }
 
     /// The person whose avatar represents the row: the latest sender who isn't you (or the
@@ -178,12 +201,17 @@ struct ConversationRow: View, Equatable {
         var parts: [String] = []
         if conversation.isUnread { parts.append("Unread") }
         if conversation.isFlagged { parts.append("Starred") }
-        parts.append("From \(peopleLine)")
+        // `peopleLine` already reads "To: …" in Sent and Drafts.
+        parts.append(style.showRecipients ? peopleLine : "From \(peopleLine)")
         parts.append(conversation.subject)
-        parts.append(InkDate.listTimestamp(conversation.date))
+        if let snoozedUntil {
+            parts.append("Snoozed until \(InkDate.reader(snoozedUntil))")
+        } else {
+            parts.append(InkDate.listTimestamp(conversation.date))
+        }
         if conversation.count > 1 { parts.append("\(conversation.count) messages") }
         if conversation.hasAttachments { parts.append("Has attachments") }
-        parts.append(conversation.snippet)
+        if !conversation.snippet.isEmpty { parts.append(conversation.snippet) }
         return parts.joined(separator: ", ")
     }
 }

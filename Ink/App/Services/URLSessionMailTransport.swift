@@ -28,6 +28,10 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
     /// Base timeout for writes; the protocol's `write` doesn't pass one.
     private var writeTimeout: TimeInterval = 60
     private var reachedEndOfStream = false
+    /// Reads waiting on the current stream task. STARTTLS must not start with one queued
+    /// (RESEARCH §3.2). `generation` tells the current task's reads from a replaced one's.
+    private var outstandingReads = 0
+    private var generation = 0
 
     init() {}
 
@@ -53,6 +57,8 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
             self.connectTimeout = timeout
             self.writeTimeout = max(timeout, 30)
             self.reachedEndOfStream = false
+            self.generation += 1
+            self.outstandingReads = 0
             return old
         }
         Self.tearDown(task: previous.0, session: previous.1)
@@ -65,6 +71,11 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
     func startTLS() async throws {
         let task = try lock.withLock { () throws -> URLSessionStreamTask in
             guard let task = self.task else { throw TransportError.notConnected }
+            // A queued read would run before the handshake and could swallow its first bytes, or
+            // hand the protocol plaintext injected after the server's STARTTLS reply.
+            guard self.outstandingReads == 0 else {
+                throw TransportError.tlsFailed("A read was still waiting when encryption was due to start.")
+            }
             return task
         }
         // Queued after everything already read and written; the handshake runs before the next I/O.
@@ -76,6 +87,8 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
         if operation.atEndOfStream { throw TransportError.closed }
         let task = operation.task
         let effectiveTimeout = operation.connectTimeout ?? timeout
+        lock.withLock { if generation == operation.generation { outstandingReads += 1 } }
+        defer { lock.withLock { if generation == operation.generation { outstandingReads -= 1 } } }
         do {
             let (data, atEOF) = try await withTaskCancellationHandler {
                 try await task.readData(ofMinLength: 1, maxLength: Self.maxReadLength, timeout: effectiveTimeout)
@@ -122,6 +135,7 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
 
     private struct Operation {
         var task: URLSessionStreamTask
+        var generation: Int
         /// Non-nil for the first operation after `open`, which also connects.
         var connectTimeout: TimeInterval?
         var writeTimeout: TimeInterval
@@ -133,7 +147,8 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
             guard let task = self.task else { throw TransportError.notConnected }
             let connect = self.connectTimeout
             self.connectTimeout = nil
-            return Operation(task: task, connectTimeout: connect, writeTimeout: self.writeTimeout, atEndOfStream: self.reachedEndOfStream)
+            return Operation(task: task, generation: self.generation, connectTimeout: connect,
+                             writeTimeout: self.writeTimeout, atEndOfStream: self.reachedEndOfStream)
         }
     }
 
@@ -165,39 +180,81 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
         if Task.isCancelled || error is CancellationError { return CancellationError() }
         if let transportError = error as? TransportError { return transportError }
         let (host, port) = lock.withLock { (self.host, self.port) }
-
         if let urlError = error as? URLError {
-            switch urlError.code {
-            case .cancelled:
-                return TransportError.closed
-            case .timedOut:
-                return connecting ? TransportError.connectFailed("\(host) didn't answer on port \(port).") : TransportError.timeout
-            case .secureConnectionFailed:
-                return TransportError.tlsFailed("The secure handshake with \(host) failed.")
-            case .serverCertificateUntrusted, .serverCertificateHasUnknownRoot:
-                return TransportError.tlsFailed("The certificate of \(host) isn't trusted.")
-            case .serverCertificateHasBadDate, .serverCertificateNotYetValid:
-                return TransportError.tlsFailed("The certificate of \(host) has expired or isn't valid yet.")
-            case .clientCertificateRejected, .clientCertificateRequired:
-                return TransportError.tlsFailed("\(host) asked for a client certificate.")
-            case .cannotFindHost, .dnsLookupFailed:
-                return TransportError.connectFailed("No server named \(host) was found.")
-            case .cannotConnectToHost:
-                return TransportError.connectFailed("\(host) isn't accepting connections on port \(port).")
-            case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
-                return TransportError.connectFailed("You're offline.")
-            case .networkConnectionLost:
-                return TransportError.connectFailed("The network connection was lost.")
-            default:
-                return TransportError.io(urlError.localizedDescription)
-            }
+            return Self.describe(urlError.code, host: host, port: port, connecting: connecting)
         }
 
+        // Stream tasks also report the socket's and Network.framework's own errors unwrapped.
         let nsError = error as NSError
-        // Secure Transport / Network.framework TLS failures (errSSL…) arrive as OSStatus codes.
-        if nsError.domain == NSOSStatusErrorDomain, (-9899 ... -9800).contains(nsError.code) {
+        switch nsError.domain {
+        case NSURLErrorDomain, "kCFErrorDomainCFNetwork":
+            // CFNetwork shares URLError's codes, plus 1 and 2 for host lookup failures.
+            if nsError.code == 1 || nsError.code == 2 {
+                return TransportError.connectFailed("No server named \(host) was found.")
+            }
+            return Self.describe(URLError.Code(rawValue: nsError.code), host: host, port: port, connecting: connecting)
+        case NSPOSIXErrorDomain, "kNWErrorDomainPOSIX":
+            if let code = POSIXErrorCode(rawValue: Int32(truncatingIfNeeded: nsError.code)),
+               let mapped = Self.describe(code, host: host, port: port, connecting: connecting) {
+                return mapped
+            }
+        case "kNWErrorDomainDNS":
+            return TransportError.connectFailed("No server named \(host) was found.")
+        case "kNWErrorDomainTLS":
             return TransportError.tlsFailed("The secure handshake with \(host) failed.")
+        case NSOSStatusErrorDomain where (-9899 ... -9800).contains(nsError.code):
+            // Secure Transport / Network.framework TLS failures (errSSL…) as OSStatus codes.
+            return TransportError.tlsFailed("The secure handshake with \(host) failed.")
+        default:
+            break
         }
         return TransportError.io(nsError.localizedDescription)
+    }
+
+    private static func describe(_ code: URLError.Code, host: String, port: Int, connecting: Bool) -> Error {
+        switch code {
+        case .cancelled:
+            return TransportError.closed
+        case .timedOut:
+            return connecting ? TransportError.connectFailed("\(host) didn't answer on port \(port).") : TransportError.timeout
+        case .secureConnectionFailed:
+            return TransportError.tlsFailed("The secure handshake with \(host) failed.")
+        case .serverCertificateUntrusted, .serverCertificateHasUnknownRoot:
+            return TransportError.tlsFailed("The certificate of \(host) isn't trusted.")
+        case .serverCertificateHasBadDate, .serverCertificateNotYetValid:
+            return TransportError.tlsFailed("The certificate of \(host) has expired or isn't valid yet.")
+        case .clientCertificateRejected, .clientCertificateRequired:
+            return TransportError.tlsFailed("\(host) asked for a client certificate.")
+        case .cannotFindHost, .dnsLookupFailed:
+            return TransportError.connectFailed("No server named \(host) was found.")
+        case .cannotConnectToHost:
+            return TransportError.connectFailed("\(host) isn't accepting connections on port \(port).")
+        case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive:
+            return TransportError.connectFailed("You're offline.")
+        case .networkConnectionLost:
+            return TransportError.connectFailed("The network connection was lost.")
+        default:
+            return TransportError.io(URLError(code).localizedDescription)
+        }
+    }
+
+    /// Socket errors that have a better sentence than strerror's; nil for the rest.
+    private static func describe(_ code: POSIXErrorCode, host: String, port: Int, connecting: Bool) -> Error? {
+        switch code {
+        case .ECONNREFUSED:
+            return TransportError.connectFailed("\(host) isn't accepting connections on port \(port).")
+        case .ETIMEDOUT:
+            return connecting ? TransportError.connectFailed("\(host) didn't answer on port \(port).") : TransportError.timeout
+        case .ECONNRESET, .ECONNABORTED, .EPIPE, .ENOTCONN:
+            return connecting
+                ? TransportError.connectFailed("\(host) closed the connection.")
+                : TransportError.connectFailed("The network connection was lost.")
+        case .ENETDOWN, .ENETUNREACH:
+            return TransportError.connectFailed("You're offline.")
+        case .EHOSTUNREACH, .EHOSTDOWN:
+            return TransportError.connectFailed("\(host) can't be reached from this network.")
+        default:
+            return nil
+        }
     }
 }

@@ -5,6 +5,7 @@ import InkCore
 
 /// The panes of the Mac window that take keyboard focus.
 enum MacPane: Hashable {
+    case sidebar
     case list
     case detail
 }
@@ -15,7 +16,7 @@ enum MacCommand: String, CaseIterable, Identifiable {
     case compose, reply, replyAll, forward
     case archive, trash, snooze, toggleRead, toggleStar, spam, moveToInbox
     case nextConversation, previousConversation, clearSelection
-    case refresh, search, commandPalette, addAccount
+    case refresh, search, commandPalette, addAccount, undo
 
     var id: String { rawValue }
 
@@ -40,6 +41,7 @@ enum MacCommand: String, CaseIterable, Identifiable {
         case .search: return "Search Mail"
         case .commandPalette: return "Command Palette"
         case .addAccount: return "Add Account…"
+        case .undo: return "Undo"
         }
     }
 
@@ -63,6 +65,7 @@ enum MacCommand: String, CaseIterable, Identifiable {
         case .search: return "magnifyingglass"
         case .commandPalette: return "command"
         case .addAccount: return "person.crop.circle.badge.plus"
+        case .undo: return "arrow.uturn.backward"
         }
     }
 
@@ -84,7 +87,8 @@ enum MacCommand: String, CaseIterable, Identifiable {
         case .refresh: return KeyboardShortcut("n", modifiers: [.command, .shift])
         case .search: return KeyboardShortcut("f", modifiers: [.command, .option])
         case .commandPalette: return KeyboardShortcut("k", modifiers: .command)
-        case .moveToInbox, .nextConversation, .previousConversation, .clearSelection, .addAccount: return nil
+        // Undo rides on Edit › Undo (⌘Z) through the window's undo manager: `MacUndoBridge`.
+        case .moveToInbox, .nextConversation, .previousConversation, .clearSelection, .addAccount, .undo: return nil
         }
     }
 
@@ -107,6 +111,7 @@ enum MacCommand: String, CaseIterable, Identifiable {
         case .refresh: return "⇧⌘N"
         case .search: return "/"
         case .commandPalette: return "⌘K"
+        case .undo: return "Z"
         case .moveToInbox, .addAccount: return nil
         }
     }
@@ -132,6 +137,7 @@ enum MacCommand: String, CaseIterable, Identifiable {
         case .search: return "find look"
         case .commandPalette: return "commands"
         case .addAccount: return "connect sign in gmail icloud outlook"
+        case .undo: return "revert back oops restore"
         }
     }
 
@@ -142,7 +148,7 @@ enum MacCommand: String, CaseIterable, Identifiable {
 
     /// Commands the palette lists, in order of usefulness.
     static let paletteCommands: [MacCommand] = [
-        .compose, .reply, .replyAll, .forward, .archive, .trash, .snooze, .toggleRead, .toggleStar,
+        .undo, .compose, .reply, .replyAll, .forward, .archive, .trash, .snooze, .toggleRead, .toggleStar,
         .spam, .moveToInbox, .refresh, .search, .addAccount,
     ]
 }
@@ -187,12 +193,18 @@ struct MacActions {
             return true
         case .reply, .replyAll, .forward:
             return focused?.latest != nil
-        case .archive, .trash, .snooze, .toggleRead, .toggleStar, .spam, .clearSelection:
+        case .archive, .trash, .snooze, .toggleRead, .toggleStar, .clearSelection:
             return !app.selection.isEmpty
+        case .spam:
+            // Already there: Spam offers "Not Spam" (Move to Inbox) instead.
+            return !app.selection.isEmpty && store.scope.role != .junk
         case .moveToInbox:
             return !app.selection.isEmpty && store.scope.role != .inbox
         case .nextConversation, .previousConversation:
+            if let searchOrder = MacVisibleList.searchOrder { return !searchOrder.isEmpty }
             return !store.conversations.isEmpty
+        case .undo:
+            return store.toast?.undoable == true
         }
     }
 
@@ -207,6 +219,8 @@ struct MacActions {
     /// Title reflecting the selection ("Mark as Read" when anything selected is unread).
     func title(for command: MacCommand) -> String {
         switch command {
+        case .moveToInbox:
+            return store.scope.role == .junk ? "Not Spam" : command.title
         case .toggleRead:
             return selected.contains(where: \.isUnread) ? "Mark as Read" : "Mark as Unread"
         case .toggleStar:
@@ -257,9 +271,9 @@ struct MacActions {
         case .moveToInbox:
             moveToInbox(selected)
         case .nextConversation:
-            step(1, order: order ?? store.conversations.map(\.id))
+            step(1, order: order ?? visibleOrder)
         case .previousConversation:
-            step(-1, order: order ?? store.conversations.map(\.id))
+            step(-1, order: order ?? visibleOrder)
         case .clearSelection:
             app.selection = []
         case .refresh:
@@ -271,7 +285,36 @@ struct MacActions {
             app.isCommandPalettePresented.toggle()
         case .addAccount:
             app.isAddAccountPresented = true
+        case .undo:
+            undo()
         }
+    }
+
+    /// Undoes the last triage action while its toast still offers Undo, and puts the selection
+    /// back on the conversations it took away.
+    func undo() {
+        guard store.toast?.undoable == true else { return }
+        let toastID = store.toast?.id
+        Haptics.tick()
+        withAnimation(InkMotion.rowRemoval) {
+            store.undo()
+        }
+        restoreSelection(afterUndoOf: toastID)
+    }
+
+    /// After an undo (from here, the toast's button or ⌘Z): selects again what the undone
+    /// removal took away, once it's back. A toast that was only dismissed restores nothing,
+    /// since its conversations are still gone.
+    func restoreSelection(afterUndoOf toastID: UUID?) {
+        guard let memory = MacVisibleList.selectionBeforeRemoval, memory.toastID == toastID else { return }
+        MacVisibleList.selectionBeforeRemoval = nil
+        let listed = Set(store.conversations.map(\.id))
+        let searching = MacVisibleList.searchOrder != nil
+        let back = memory.selection.filter { id in
+            listed.contains(id) || (searching && store.conversation(id: id) != nil)
+        }
+        guard !back.isEmpty else { return }
+        app.selection = back
     }
 
     /// Swipe/menu actions on specific conversations, animated and with a haptic.
@@ -281,31 +324,52 @@ struct MacActions {
             app.perform(.snooze, on: conversations)
             return
         }
-        if action.removesFromList { Haptics.success() } else { Haptics.tick() }
+        guard action.removesFromList else {
+            Haptics.tick()
+            withAnimation(InkMotion.rowRemoval) {
+                app.perform(action, on: conversations)
+            }
+            return
+        }
+        Haptics.success()
+        let before = app.selection
+        let searchNeighbour = neighbourInSearch(past: conversations)
         withAnimation(InkMotion.rowRemoval) {
             app.perform(action, on: conversations)
+            // AppModel steps along the mailbox; while searching, stay within the results.
+            if let searchNeighbour { app.selection = searchNeighbour }
         }
+        rememberSelection(before, removing: conversations)
     }
 
     func moveToInbox(_ conversations: [Conversation]) {
         guard !conversations.isEmpty else { return }
         Haptics.success()
-        if store.scope.role != .inbox { advanceSelection(past: conversations) }
+        let before = app.selection
         withAnimation(InkMotion.rowRemoval) {
+            if store.scope.role != .inbox { advanceSelection(past: conversations) }
             store.moveToInbox(conversations)
         }
+        rememberSelection(before, removing: conversations)
     }
 
     func move(_ conversations: [Conversation], to mailbox: MailboxInfo) {
         guard !conversations.isEmpty else { return }
         Haptics.success()
-        advanceSelection(past: conversations)
+        let before = app.selection
         withAnimation(InkMotion.rowRemoval) {
+            advanceSelection(past: conversations)
             store.move(conversations, to: mailbox)
         }
+        rememberSelection(before, removing: conversations)
     }
 
     // MARK: Private
+
+    /// What j/k walk: the search results while they're shown, otherwise the mailbox.
+    private var visibleOrder: [String] {
+        MacVisibleList.searchOrder ?? store.conversations.map(\.id)
+    }
 
     private func reply(_ mode: ReplyMode) {
         guard let message = focused?.latest else { return }
@@ -328,6 +392,10 @@ struct MacActions {
 
     /// Keeps the selection on a neighbour when selected conversations leave the list.
     private func advanceSelection(past removed: [Conversation]) {
+        if let searchNeighbour = neighbourInSearch(past: removed) {
+            app.selection = searchNeighbour
+            return
+        }
         let ids = Set(removed.map(\.id))
         guard !app.selection.isDisjoint(with: ids) else { return }
         let list = store.conversations
@@ -339,6 +407,41 @@ struct MacActions {
         let before = list[..<lastIndex].last { !ids.contains($0.id) }
         app.selection = (after ?? before).map { [$0.id] } ?? []
     }
+
+    /// While search results are shown: the result to select once `removed` are dealt with, or
+    /// nil when not searching or the selection isn't affected.
+    private func neighbourInSearch(past removed: [Conversation]) -> Set<String>? {
+        guard let order = MacVisibleList.searchOrder else { return nil }
+        let ids = Set(removed.map(\.id))
+        guard !app.selection.isDisjoint(with: ids) else { return nil }
+        guard let lastIndex = order.lastIndex(where: { ids.contains($0) }) else { return Set<String>() }
+        let after = order[(lastIndex + 1)...].first { !ids.contains($0) }
+        let before = order[..<lastIndex].last { !ids.contains($0) }
+        guard let neighbour = after ?? before else { return Set<String>() }
+        return Set([neighbour])
+    }
+
+    /// Remembers what was selected before an undoable removal, so Undo can put it back.
+    private func rememberSelection(_ selection: Set<String>, removing removed: [Conversation]) {
+        let ids = Set(removed.map(\.id))
+        guard store.toast?.undoable == true, !selection.isDisjoint(with: ids) else {
+            MacVisibleList.selectionBeforeRemoval = nil
+            return
+        }
+        MacVisibleList.selectionBeforeRemoval = (store.toast?.id, selection)
+    }
+}
+
+/// Window-wide facts about what the list column shows, for commands that run from anywhere
+/// (menu bar, reader, palette). Ink has one main window, so plain statics are enough; nothing
+/// here drives rendering.
+@MainActor
+enum MacVisibleList {
+    /// Conversation IDs of the search results in display order while search replaces the
+    /// mailbox list; nil otherwise.
+    static var searchOrder: [String]?
+    /// The selection before the last undoable removal, and the toast that offers its Undo.
+    static var selectionBeforeRemoval: (toastID: UUID?, selection: Set<String>)?
 }
 
 /// AppKit facts SwiftUI doesn't expose.

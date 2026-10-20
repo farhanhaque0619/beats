@@ -8,11 +8,14 @@ import InkCore
 /// A UIKit pan recognizer that only accepts mostly-horizontal pans drives the row, so vertical
 /// scrolling never notices it. Each side has a short and a long threshold (from
 /// `SwipeConfiguration`); crossing one changes the colour behind the row, pops the icon and
-/// ticks a haptic. Letting go past a threshold commits: actions that take the conversation out of
-/// the list fly the row off-screen first and then call `onCommit`, everything else springs back
-/// and commits right away.
+/// ticks a haptic (light at the short threshold, medium at the long one, a selection tick when
+/// backing off). Letting go past a threshold commits: actions that take the conversation out of
+/// the list fly the row off-screen first (carrying the finger's speed) and then call `onCommit`,
+/// everything else springs back and commits right away. While a released row is still moving,
+/// the backdrop keeps the colour of what was chosen and taps are ignored.
 struct SwipeRow<Content: View>: View {
     private let configuration: SwipeConfiguration
+    private let width: CGFloat
     private let isUnread: Bool
     private let isFlagged: Bool
     private let debugFraction: CGFloat?
@@ -25,14 +28,20 @@ struct SwipeRow<Content: View>: View {
     @Environment(AppSettings.self) private var settings
 
     @State private var offset: CGFloat = 0
-    @State private var width: CGFloat = 0
     @State private var isDragging = false
     @State private var isRemoving = false
     @State private var lastArm: SwipeRowArm?
+    /// What the backdrop shows while a released row travels home or off-screen.
+    @State private var release: SwipeRowRelease?
+    /// Bumped by every drag, settle and fly-off, so a stale animation completion can't clear
+    /// newer state.
+    @State private var motionGeneration = 0
     @State private var quietUntil = Date.distantPast
 
     /// - Parameters:
     ///   - configuration: Which action each swipe direction and length triggers.
+    ///   - width: The row's width, measured once by the list rather than by every row. Swipes
+    ///     stay off while it is zero.
     ///   - isUnread: Picks "Mark as read" or "Mark as unread" for the read toggle.
     ///   - isFlagged: Picks "Star" or "Unstar" for the star toggle.
     ///   - debugFraction: Renders the row frozen mid-swipe at this fraction of its width
@@ -42,6 +51,7 @@ struct SwipeRow<Content: View>: View {
     ///   - onCommit: Called once the action should happen.
     init(
         configuration: SwipeConfiguration,
+        width: CGFloat,
         isUnread: Bool = false,
         isFlagged: Bool = false,
         debugFraction: CGFloat? = nil,
@@ -51,6 +61,7 @@ struct SwipeRow<Content: View>: View {
         @ViewBuilder content: () -> Content
     ) {
         self.configuration = configuration
+        self.width = width
         self.isUnread = isUnread
         self.isFlagged = isFlagged
         self.debugFraction = debugFraction
@@ -62,7 +73,6 @@ struct SwipeRow<Content: View>: View {
 
     var body: some View {
         let shown = displayedOffset
-        let arm = armedAction(at: shown)
         Button {
             handleTap()
         } label: {
@@ -72,13 +82,13 @@ struct SwipeRow<Content: View>: View {
         .buttonStyle(SwipeRowPressStyle())
         .accessibilityActions {
             ForEach(accessibleActions) { action in
-                Button(title(for: action)) { onCommit(action) }
+                Button(SwipeRowLabels.title(for: action, isUnread: isUnread, isFlagged: isFlagged)) { onCommit(action) }
             }
         }
         .offset(x: shown)
         .background {
-            if shown != 0 {
-                backdrop(offset: shown, arm: arm)
+            if let layer = backdrop(offset: shown) {
+                layer
             }
         }
         .clipped()
@@ -93,11 +103,6 @@ struct SwipeRow<Content: View>: View {
                 onCancelled: { dragCancelled() }
             )
         )
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.size.width
-        } action: { newWidth in
-            width = newWidth
-        }
     }
 
     // MARK: Geometry
@@ -115,15 +120,18 @@ struct SwipeRow<Content: View>: View {
         max(shortThreshold + SwipeRowMetrics.minimumThresholdGap, width * SwipeRowMetrics.longFraction)
     }
 
-    /// The finger's translation turned into the row's offset: 1:1 up to the row's width, a
-    /// third of the rate past it, and barely at all towards a side with no actions.
+    /// The finger's translation turned into the row's offset: 1:1 up to the row's width, then
+    /// rubber-banding, and only a short, stiff give towards a side with no actions.
     private func resisted(_ translation: CGFloat) -> CGFloat {
         guard let side = SwipeRowSide(offset: translation) else { return 0 }
-        guard hasActions(on: side) else { return translation * SwipeRowMetrics.deadSideResistance }
         let distance = abs(translation)
+        guard hasActions(on: side) else {
+            return side.sign * SwipeRowMetrics.rubberBand(distance, dimension: SwipeRowMetrics.deadSideGive)
+        }
         let limit = max(width, 1)
-        let eased = distance <= limit ? distance : limit + (distance - limit) * SwipeRowMetrics.rubberBand
-        return side.sign * eased
+        guard distance > limit else { return translation }
+        let overflow = SwipeRowMetrics.rubberBand(distance - limit, dimension: limit * SwipeRowMetrics.overflowGiveFraction)
+        return side.sign * (limit + overflow)
     }
 
     // MARK: Actions
@@ -151,55 +159,62 @@ struct SwipeRow<Content: View>: View {
         guard width > 0, let side = SwipeRowSide(offset: offset) else { return nil }
         let distance = abs(offset)
         let pair = actionPair(on: side)
-        let pastLong = distance >= longThreshold
-        if pastLong, pair.long != .none {
+        if distance >= longThreshold, pair.long != .none {
             return SwipeRowArm(action: pair.long, isLong: true)
         }
         if distance >= shortThreshold, pair.short != .none {
-            return SwipeRowArm(action: pair.short, isLong: pastLong)
+            return SwipeRowArm(action: pair.short, isLong: false)
         }
         return nil
     }
 
+    /// Custom actions for VoiceOver, Switch Control and Voice Control: the short actions first
+    /// (archive by default), then the long ones.
     private var accessibleActions: [SwipeAction] {
         var actions: [SwipeAction] = []
-        let configured = [configuration.rightShort, configuration.rightLong, configuration.leftShort, configuration.leftLong]
+        let configured = [configuration.leftShort, configuration.rightShort, configuration.leftLong, configuration.rightLong]
         for action in configured where action != .none && !actions.contains(action) {
             actions.append(action)
         }
         return actions
     }
 
-    private func title(for action: SwipeAction) -> String {
-        switch action {
-        case .toggleRead: return isUnread ? "Mark as read" : "Mark as unread"
-        case .flag: return isFlagged ? "Unstar" : "Star"
-        default: return action.title
-        }
-    }
-
-    private func symbol(for action: SwipeAction) -> String {
-        switch action {
-        case .toggleRead: return isUnread ? "envelope.open.fill" : "envelope.badge.fill"
-        case .flag: return isFlagged ? "star.slash.fill" : "star.fill"
-        default: return action.systemImage
-        }
-    }
-
     // MARK: Backdrop
 
-    private func backdrop(offset: CGFloat, arm: SwipeRowArm?) -> some View {
-        let side: SwipeRowSide = offset > 0 ? .right : .left
+    /// The layer behind the row: live while dragging (or frozen for screenshots), and the
+    /// released choice while the row animates home or away.
+    private func backdrop(offset: CGFloat) -> SwipeRowBackdrop? {
+        let side: SwipeRowSide
+        let arm: SwipeRowArm?
+        let showsTitle: Bool
+        let unread: Bool
+        let flagged: Bool
+        if let release {
+            side = release.side
+            arm = release.arm
+            showsTitle = release.showsTitle
+            unread = release.isUnread
+            flagged = release.isFlagged
+        } else if let liveSide = SwipeRowSide(offset: offset) {
+            side = liveSide
+            arm = armedAction(at: offset)
+            showsTitle = arm != nil && abs(offset) >= longThreshold
+            unread = isUnread
+            flagged = isFlagged
+        } else {
+            return nil
+        }
         let shownAction = arm?.action ?? hintAction(on: side)
         return SwipeRowBackdrop(
             side: side,
             reveal: abs(offset),
-            arm: arm,
+            rowWidth: width,
             tint: arm.map { $0.action.tint(accent: accent) } ?? Ink.fill,
             glyphColor: shownAction == .toggleRead ? settings.accent.onColor : .white,
-            symbol: shownAction == .none ? nil : symbol(for: shownAction),
-            title: title(for: shownAction),
-            showsTitle: arm?.isLong == true
+            symbol: shownAction == .none ? nil : SwipeRowLabels.symbol(for: shownAction, isUnread: unread, isFlagged: flagged),
+            title: SwipeRowLabels.title(for: shownAction, isUnread: unread, isFlagged: flagged),
+            showsTitle: showsTitle,
+            tier: arm?.tier ?? 0
         )
     }
 
@@ -212,7 +227,10 @@ struct SwipeRow<Content: View>: View {
 
     private func dragBegan() {
         isDragging = true
+        motionGeneration &+= 1
+        release = nil
         lastArm = armedAction(at: offset)
+        Haptics.prepare()
     }
 
     private func dragChanged(_ translation: CGFloat) {
@@ -220,8 +238,8 @@ struct SwipeRow<Content: View>: View {
         offset = next
         let arm = armedAction(at: next)
         if arm != lastArm {
+            SwipeRowFeedback.crossed(from: lastArm, to: arm)
             lastArm = arm
-            Haptics.threshold()
         }
     }
 
@@ -230,7 +248,7 @@ struct SwipeRow<Content: View>: View {
         lastArm = nil
         let released = resisted(translation)
         guard let side = SwipeRowSide(offset: released) else {
-            settle()
+            settle(from: released, velocity: velocity)
             return
         }
         var chosen = armedAction(at: released)
@@ -243,45 +261,75 @@ struct SwipeRow<Content: View>: View {
             let short = actionPair(on: side).short
             if short != .none { chosen = SwipeRowArm(action: short, isLong: false) }
         }
+        release = SwipeRowRelease(
+            side: side,
+            arm: chosen,
+            showsTitle: chosen != nil && abs(released) >= longThreshold,
+            isUnread: isUnread,
+            isFlagged: isFlagged
+        )
         if let chosen {
-            commit(chosen.action, towards: side)
+            commit(chosen.action, towards: side, from: released, velocity: velocity)
         } else {
-            settle()
+            settle(from: released, velocity: velocity)
         }
     }
 
     private func dragCancelled() {
         isDragging = false
         lastArm = nil
-        settle()
+        if let side = SwipeRowSide(offset: offset) {
+            release = SwipeRowRelease(side: side, arm: nil, showsTitle: false, isUnread: isUnread, isFlagged: isFlagged)
+        }
+        settle(from: offset, velocity: 0)
     }
 
-    private func settle() {
+    /// Springs the row home, picking up the finger's speed when it was already heading there.
+    private func settle(from start: CGFloat, velocity: CGFloat) {
         quietUntil = Date().addingTimeInterval(SwipeRowMetrics.settleQuietTime)
-        withAnimation(InkMotion.swipeSettle) { offset = 0 }
+        motionGeneration &+= 1
+        let generation = motionGeneration
+        let animation = Animation.interpolatingSpring(
+            duration: SwipeRowMetrics.settleDuration,
+            bounce: SwipeRowMetrics.settleBounce,
+            initialVelocity: SwipeRowMetrics.springVelocity(velocity, from: start, to: 0, limit: SwipeRowMetrics.settleVelocityLimit)
+        )
+        withAnimation(animation, completionCriteria: .logicallyComplete) {
+            offset = 0
+        } completion: {
+            guard generation == motionGeneration else { return }
+            release = nil
+        }
     }
 
-    private func commit(_ action: SwipeAction, towards side: SwipeRowSide) {
+    private func commit(_ action: SwipeAction, towards side: SwipeRowSide, from start: CGFloat, velocity: CGFloat) {
         Haptics.soft()
         guard action.removesFromList, action != .snooze else {
             // Read, star and snooze keep the row: spring home, then act (snooze opens the picker).
-            settle()
+            settle(from: start, velocity: velocity)
             onCommit(action)
             return
         }
         isRemoving = true
+        motionGeneration &+= 1
         onWillRemove(action)
-        withAnimation(SwipeRowMetrics.flyOff) {
-            offset = side.sign * (width + SwipeRowMetrics.flyOffOvershoot)
+        let target = side.sign * (width + SwipeRowMetrics.flyOffOvershoot)
+        let flyOff = Animation.interpolatingSpring(
+            duration: SwipeRowMetrics.flyOffDuration,
+            bounce: 0,
+            initialVelocity: SwipeRowMetrics.springVelocity(velocity, from: start, to: target, limit: SwipeRowMetrics.flyOffVelocityLimit)
+        )
+        withAnimation(flyOff) {
+            offset = target
         }
         Task {
-            try? await Task.sleep(for: SwipeRowMetrics.flyOffDuration)
+            try? await Task.sleep(for: SwipeRowMetrics.commitDelay)
             onCommit(action)
             // If the conversation is still listed (e.g. archiving from Starred), bring it back.
             try? await Task.sleep(for: SwipeRowMetrics.recoveryDelay)
             guard isRemoving else { return }
             isRemoving = false
-            settle()
+            settle(from: offset, velocity: 0)
         }
     }
 }
@@ -291,22 +339,44 @@ struct SwipeRow<Content: View>: View {
 private enum SwipeRowMetrics {
     static let shortMinimum: CGFloat = 72
     static let shortFraction: CGFloat = 0.22
-    static let longFraction: CGFloat = 0.58
+    static let longFraction: CGFloat = 0.60
     static let minimumThresholdGap: CGFloat = 40
-    static let rubberBand: CGFloat = 1.0 / 3.0
-    static let deadSideResistance: CGFloat = 0.12
+    /// How far a row gives towards a side with no actions, at most.
+    static let deadSideGive: CGFloat = 44
+    /// Past the row's width the rubber band tops out at this fraction of the width.
+    static let overflowGiveFraction: CGFloat = 0.3
     static let flingVelocity: CGFloat = 900
-    static let flingMinimumDistance: CGFloat = 24
+    static let flingMinimumDistance: CGFloat = 40
     static let flyOffOvershoot: CGFloat = 48
-    static let flyOff = Animation.spring(response: 0.26, dampingFraction: 1)
-    static let flyOffDuration = Duration.milliseconds(220)
+    static let flyOffDuration: TimeInterval = 0.24
+    static let flyOffVelocityLimit: Double = 12
+    /// When `onCommit` runs after a row starts flying off (the row is off-screen by then).
+    static let commitDelay = Duration.milliseconds(220)
     static let recoveryDelay = Duration.milliseconds(650)
-    static let settleQuietTime: TimeInterval = 0.32
+    static let settleDuration: TimeInterval = 0.35
+    static let settleBounce: Double = 0.12
+    static let settleVelocityLimit: Double = 8
+    static let settleQuietTime: TimeInterval = 0.3
     static let glyphInset: CGFloat = 22
     static let glyphMinimumLane: CGFloat = 64
+
+    /// UIScrollView-style resistance: grows with `x` but never reaches `dimension`.
+    static func rubberBand(_ x: CGFloat, dimension: CGFloat) -> CGFloat {
+        guard x > 0, dimension > 0 else { return 0 }
+        return (1 - 1 / ((x * 0.55 / dimension) + 1)) * dimension
+    }
+
+    /// The finger's speed as a spring's initial velocity (fractions of the remaining distance
+    /// per second). Only speed towards the target carries over, so a row never lurches the
+    /// wrong way before heading home.
+    static func springVelocity(_ velocity: CGFloat, from start: CGFloat, to end: CGFloat, limit: Double) -> Double {
+        let distance = end - start
+        guard abs(distance) > 1 else { return 0 }
+        return min(max(Double(velocity / distance), 0), limit)
+    }
 }
 
-private enum SwipeRowSide {
+private enum SwipeRowSide: Equatable {
     /// The finger moves right, revealing the leading edge.
     case right
     /// The finger moves left, revealing the trailing edge.
@@ -325,29 +395,82 @@ private enum SwipeRowSide {
     var sign: CGFloat { self == .right ? 1 : -1 }
 }
 
-/// The action that would run on release, and whether the row is past the long threshold.
+/// The action that would run on release, and whether it's the side's long action.
 private struct SwipeRowArm: Equatable {
     var action: SwipeAction
     var isLong: Bool
+
+    /// 1 for the short action, 2 for the long one (0 is "nothing armed").
+    var tier: Int { isLong ? 2 : 1 }
+}
+
+/// A row that has been let go: the side and choice to keep showing behind it, and its read and
+/// star state at that moment, so labels don't flip while it animates.
+private struct SwipeRowRelease: Equatable {
+    var side: SwipeRowSide
+    /// Nil when the swipe was cancelled.
+    var arm: SwipeRowArm?
+    var showsTitle: Bool
+    var isUnread: Bool
+    var isFlagged: Bool
+}
+
+/// Titles and glyphs for actions whose wording depends on the conversation's state.
+private enum SwipeRowLabels {
+    static func title(for action: SwipeAction, isUnread: Bool, isFlagged: Bool) -> String {
+        switch action {
+        case .toggleRead: return isUnread ? "Mark as read" : "Mark as unread"
+        case .flag: return isFlagged ? "Unstar" : "Star"
+        default: return action.title
+        }
+    }
+
+    static func symbol(for action: SwipeAction, isUnread: Bool, isFlagged: Bool) -> String {
+        switch action {
+        case .toggleRead: return isUnread ? "envelope.open.fill" : "envelope.badge.fill"
+        case .flag: return isFlagged ? "star.slash.fill" : "star.fill"
+        default: return action.systemImage
+        }
+    }
+}
+
+/// Swipe haptics (§5.2): a light impact arming the short action, a medium one for the long
+/// action, and a selection tick when backing off. `Haptics.prepare()` runs as a drag begins.
+@MainActor
+private enum SwipeRowFeedback {
+    static func crossed(from old: SwipeRowArm?, to new: SwipeRowArm?) {
+        let before = old?.tier ?? 0
+        let after = new?.tier ?? 0
+        if after < before || after == 0 {
+            Haptics.tick()
+        } else {
+            Haptics.threshold(isLong: after == 2)
+        }
+    }
 }
 
 /// The layer revealed behind a swiping row: grey with a grey icon until the first threshold,
-/// then the action's colour with a white icon that tracks the row's edge.
+/// then the action's colour with a white icon that tracks the row's edge (and stays on screen
+/// once the row has flown off).
 private struct SwipeRowBackdrop: View {
     let side: SwipeRowSide
     let reveal: CGFloat
-    let arm: SwipeRowArm?
+    let rowWidth: CGFloat
     let tint: Color
     let glyphColor: Color
     let symbol: String?
     let title: String
     let showsTitle: Bool
+    /// 0 before the first threshold, 1 short, 2 long. The glyph pops each time it changes.
+    let tier: Int
 
     var body: some View {
         let isRight = side == .right
+        let minimumLane = SwipeRowMetrics.glyphMinimumLane
+        let lane = min(max(reveal, minimumLane), max(rowWidth, minimumLane))
         Rectangle()
             .fill(tint)
-            .animation(InkMotion.snappy, value: arm)
+            .animation(InkMotion.snappy, value: tint)
             .overlay(alignment: isRight ? .leading : .trailing) {
                 HStack(spacing: InkSpace.s) {
                     if isRight { caption }
@@ -356,7 +479,7 @@ private struct SwipeRowBackdrop: View {
                 }
                 .animation(InkMotion.snappy, value: showsTitle)
                 .padding(.horizontal, SwipeRowMetrics.glyphInset)
-                .frame(width: max(reveal, SwipeRowMetrics.glyphMinimumLane), alignment: isRight ? .trailing : .leading)
+                .frame(width: lane, alignment: isRight ? .trailing : .leading)
                 .opacity(Double(min(1, max(0, (reveal - 12) / 44))))
             }
             .accessibilityHidden(true)
@@ -377,11 +500,11 @@ private struct SwipeRowBackdrop: View {
         if let symbol {
             Image(systemName: symbol)
                 .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(arm == nil ? Ink.secondary : glyphColor)
+                .foregroundStyle(tier == 0 ? Ink.secondary : glyphColor)
                 .contentTransition(.symbolEffect(.replace))
-                .scaleEffect(arm == nil ? 1 : 1.15)
-                .animation(InkMotion.bouncy, value: arm)
-                .symbolEffect(.bounce, value: arm)
+                .scaleEffect(tier == 0 ? 1 : 1.15)
+                .animation(InkMotion.bouncy, value: tier)
+                .symbolEffect(.bounce, value: tier)
         }
     }
 }
@@ -401,7 +524,8 @@ private struct SwipeRowPressStyle: ButtonStyle {
 }
 
 /// A pan that only starts for mostly-horizontal movement towards a side with actions, and never
-/// runs alongside another recognizer, so the scroll view keeps every vertical drag.
+/// runs alongside another recognizer, so the scroll view (and pull to refresh) keeps every
+/// vertical drag.
 @MainActor
 private struct SwipeRowPan: UIGestureRecognizerRepresentable {
     var isEnabled: Bool
@@ -475,6 +599,31 @@ private final class SwipeRowPanDelegate: NSObject, UIGestureRecognizerDelegate {
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
         false
+    }
+
+    /// iOS 26's full-width "swipe back" (`interactiveContentPopGestureRecognizer`) would race a
+    /// leading-to-trailing row swipe on a pushed screen. Make it wait for the row's pan to fail,
+    /// the way native swipe actions do; the edge-only back swipe keeps its own priority.
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            guard let navigation = Self.navigationController(containing: gestureRecognizer.view) else { return false }
+            return otherGestureRecognizer === navigation.interactiveContentPopGestureRecognizer
+        }
+        #endif
+        return false
+    }
+
+    private static func navigationController(containing view: UIView?) -> UINavigationController? {
+        var responder: UIResponder? = view
+        while let current = responder {
+            if let navigation = current as? UINavigationController { return navigation }
+            responder = current.next
+        }
+        return nil
     }
 }
 #endif

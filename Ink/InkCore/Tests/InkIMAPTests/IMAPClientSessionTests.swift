@@ -125,19 +125,25 @@ final class IMAPClientSessionTests: XCTestCase {
         XCTAssertTrue(transport.transcript.hasPrefix("A001 STARTTLS\r\nA002 CAPABILITY\r\n"))
     }
 
-    func testStartTLSDiscardsBytesSentBeforeTheHandshake() async throws {
-        // A man-in-the-middle appends a fake capability after the STARTTLS OK.
+    /// A man in the middle appends a fake capability after the STARTTLS OK. Those bytes arrived
+    /// in plaintext; the connection is abandoned, not cleaned up (RESEARCH §3.2, STARTTLS rule 2).
+    func testStartTLSAbortsWhenBytesFollowTheOK() async {
         let transport = ScriptedTransport([
             .send("* OK [CAPABILITY IMAP4rev1 STARTTLS] ready\r\n"),
             .expect("* STARTTLS", reply: "{TAG} OK Begin TLS\r\n* CAPABILITY IMAP4rev1 AUTH=PLAIN LOGINDISABLED X-INJECTED\r\n"),
             .expect("* CAPABILITY", reply: "* CAPABILITY IMAP4rev1 AUTH=PLAIN\r\n{TAG} OK done\r\n"),
         ])
         let client = IMAPClient(host: "h", port: 143, security: .startTLS, transport: transport)
-        try await withWatchdog(transport) {
-            try await client.connect()
+        await assertThrowsMailError(matching: { if case .tlsFailed = $0 { return true } else { return false } }) {
+            try await withWatchdog(transport) { try await client.connect() }
         }
+        XCTAssertFalse(transport.didStartTLS, "the handshake never starts")
+        XCTAssertFalse(transport.isOpen)
+        XCTAssertEqual(transport.transcript, "A001 STARTTLS\r\n", "nothing else is sent")
+        let state = await client.state
+        XCTAssertEqual(state, .disconnected)
         let caps = await client.capabilities
-        XCTAssertEqual(caps, ["IMAP4REV1", "AUTH=PLAIN"])
+        XCTAssertFalse(caps.contains("X-INJECTED"))
     }
 
     func testStartTLSRequiredButNotOffered() async {

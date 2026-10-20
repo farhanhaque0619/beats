@@ -94,9 +94,11 @@ struct EmailRenderRequest: Sendable {
 enum EmailDocumentBuilder {
     private static let contentIDPattern = try? NSRegularExpression(pattern: #"cid:([^"'\s<>)]+)"#, options: [.caseInsensitive])
 
+    /// Runs on the main thread, so it only gathers: the HTML itself is searched for `cid:`
+    /// references off the main thread, in `document(for:)`.
     static func request(for body: MessageBody, key: EmailRenderKey) -> EmailRenderRequest {
         var parts: [String: EmailInlinePart] = [:]
-        if let html = body.html, html.range(of: "cid:", options: .caseInsensitive) != nil {
+        if body.html != nil {
             for attachment in body.attachments {
                 guard let contentID = attachment.contentID, let data = attachment.data else { continue }
                 parts[normalizedContentID(contentID)] = EmailInlinePart(mimeType: attachment.mimeType, data: data)
@@ -117,7 +119,18 @@ enum EmailDocumentBuilder {
             fontSizePx: request.key.fontSizePx,
             collapseQuotes: request.key.collapseQuotes
         )
-        return EmailHTMLDocument.build(html: html, plainText: request.plainText, options: options)
+        return lockingZoom(EmailHTMLDocument.build(html: html, plainText: request.plainText, options: options))
+    }
+
+    /// The page sits inside the thread's scroll view and can't pan, so pinch and double-tap
+    /// zoom would strand you in a magnified corner. WKWebView honours `user-scalable=no`.
+    static func lockingZoom(_ document: String) -> String {
+        let viewport = #"content="width=device-width, initial-scale=1""#
+        let head = document.prefix(4_096)
+        guard let range = head.range(of: viewport) else { return document }
+        var locked = document
+        locked.replaceSubrange(range, with: #"content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no""#)
+        return locked
     }
 
     /// Rewrites `cid:` references to `data:` URIs so inline images show without any loading.
@@ -179,33 +192,87 @@ enum ReaderWebKit {
     static let dataStore = WKWebsiteDataStore.nonPersistent()
 }
 
-/// A content rule list that blocks every http(s) load, compiled once per launch.
+/// The two content rule lists the reader uses, each compiled once per launch.
 @MainActor
 enum ReaderContentRules {
-    private static let identifier = "ink.reader.block-remote-content.v1"
-    private static let rules = #"[{"trigger":{"url-filter":"^https?://"},"action":{"type":"block"}}]"#
+    private static let remoteContent = ReaderCompiledRules(
+        identifier: "ink.reader.block-remote-content.v1",
+        source: #"[{"trigger":{"url-filter":"^https?://"},"action":{"type":"block"}}]"#
+    )
 
-    private static var compiled: WKContentRuleList?
-    private static var isCompiling = false
-    private static var waiting: [CheckedContinuation<WKContentRuleList?, Never>] = []
+    private static let trackers = ReaderCompiledRules(
+        identifier: "ink.reader.block-trackers.v1",
+        source: trackerRules()
+    )
 
-    /// The blocker, or nil if WebKit couldn't compile it (the document's CSP still blocks
-    /// remote images in that case).
+    /// Images off: every http(s) load is blocked. Nil if WebKit couldn't compile it (the
+    /// document's CSP still blocks remote images in that case).
     static func remoteContentBlockList() async -> WKContentRuleList? {
+        await remoteContent.list()
+    }
+
+    /// Images on: known open-tracking services stay blocked and no cookies are sent, so
+    /// "Load images" doesn't also tell the sender you read it.
+    static func trackerBlockList() async -> WKContentRuleList? {
+        await trackers.list()
+    }
+
+    /// Hosts and paths of common open-tracking pixels (the same vendors the privacy banner
+    /// counts). Plain literals only: content-blocker regexes reject `|`, `\b`, `\d` and friends,
+    /// and one bad pattern fails the whole list.
+    private static let trackerPatterns: [String] = [
+        #"mailtrack\.io"#, #"yesware\.com"#, #"mixmax\.com"#, #"track\.hubspot"#, "hubspotlinks", "hs-analytics",
+        "sidekickopen", #"mailfoogae\.appspot\.com"#, #"bananatag\.com"#, #"getnotify\.com"#, #"streak\.com/"#,
+        #"superhuman\.com"#, "/track/open", "/wf/open", #"/open\.php"#, #"open\.aspx"#, #"emltrk\.com"#,
+        #"list-manage\.com/track"#, #"mandrillapp\.com/track"#, #"sendgrid\.net/wf"#, #"pardot\.com/r/"#,
+        "convertkit-mail", #"open\.convertkit"#, #"linkedin\.com/emimp"#, "email_open_log_pic",
+        #"google-analytics\.com/collect"#, #"/o\.gif"#, #"/pixel\.gif"#, #"/pixel\.png"#, #"/pixel\?"#,
+        "/pixel/", #"://pixel\."#, "/beacon", #"/trk\?"#, "/trk/", "/tracking/", #"/open\?"#, #"awstrack\.me"#,
+        #"mailgun\.org/o"#, "mktoresp", #"/imp\?"#, "/impression", #"trk\.klclick"#, "klaviyomail",
+    ]
+
+    private static func trackerRules() -> String {
+        var rules: [[String: Any]] = [
+            ["trigger": ["url-filter": ".*"], "action": ["type": "block-cookies"]],
+        ]
+        for pattern in trackerPatterns {
+            rules.append(["trigger": ["url-filter": pattern], "action": ["type": "block"]])
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: rules, options: [.withoutEscapingSlashes]),
+              let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
+    }
+}
+
+/// One content rule list, compiled on first use and shared by every message after that.
+@MainActor
+private final class ReaderCompiledRules {
+    private let identifier: String
+    private let source: String
+    private var compiled: WKContentRuleList?
+    private var isCompiling = false
+    private var waiting: [CheckedContinuation<WKContentRuleList?, Never>] = []
+
+    init(identifier: String, source: String) {
+        self.identifier = identifier
+        self.source = source
+    }
+
+    func list() async -> WKContentRuleList? {
         if let compiled { return compiled }
         return await withCheckedContinuation { continuation in
             waiting.append(continuation)
             guard !isCompiling else { return }
             isCompiling = true
-            WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: rules) { list, _ in
+            WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: source) { list, _ in
                 MainActor.assumeIsolated {
-                    finish(with: list)
+                    self.finish(with: list)
                 }
             }
         }
     }
 
-    private static func finish(with list: WKContentRuleList?) {
+    private func finish(with list: WKContentRuleList?) {
         compiled = list
         isCompiling = false
         let continuations = waiting
@@ -225,10 +292,17 @@ enum EmailWebScript {
     (function () {
       'use strict';
       var root = document.documentElement;
+      var minimumZoom = 0.4;
       var lastHeight = 0;
       var lastWidth = -1;
+      var lastExcess = -1;
+      var creep = 0;
+      var resized = false;
       var queued = false;
 
+      // Wide newsletters (fixed 600-700px tables) shrink to the view's width instead of scrolling
+      // sideways. The email sits in #ink-content, which scrolls its own overflow, so the page
+      // itself never looks wider than the view: measure the wrapper's content too.
       function fit() {
         var body = document.body;
         var width = window.innerWidth;
@@ -236,8 +310,13 @@ enum EmailWebScript {
         lastWidth = width;
         body.style.zoom = '';
         var contentWidth = root.scrollWidth;
+        var wrapper = document.getElementById('ink-content');
+        if (wrapper) {
+          var outside = Math.max(0, width - wrapper.clientWidth);
+          contentWidth = Math.max(contentWidth, wrapper.scrollWidth + outside);
+        }
         if (contentWidth > width + 1) {
-          body.style.zoom = String(width / contentWidth);
+          body.style.zoom = String(Math.max(width / contentWidth, minimumZoom));
         }
       }
 
@@ -249,15 +328,34 @@ enum EmailWebScript {
         return Math.ceil(height);
       }
 
+      function post(height) {
+        var handlers = window.webkit && window.webkit.messageHandlers;
+        if (handlers && handlers.height) { handlers.height.postMessage(height); }
+      }
+
       function report() {
         if (!queued) { return; }
         queued = false;
+        var afterResize = resized;
+        resized = false;
         fit();
         var height = measure();
-        if (height > 0 && Math.abs(height - lastHeight) >= 1) {
-          lastHeight = height;
-          window.webkit.messageHandlers.height.postMessage(height);
+        if (height <= 0 || Math.abs(height - lastHeight) < 1) { return; }
+        // A page sized in viewport units (100vh) outgrows every height it is given, by the same
+        // amount each time the view catches up. After a few rounds of that, stop feeding it.
+        // (Images loading one by one also grow the page, but not in answer to a resize.)
+        var viewport = window.innerHeight;
+        if (afterResize && lastHeight > 0 && height > lastHeight && Math.abs(viewport - lastHeight) <= 1) {
+          var excess = height - viewport;
+          creep = Math.abs(excess - lastExcess) <= 1 ? creep + 1 : 0;
+          lastExcess = excess;
+          if (creep >= 3) { return; }
+        } else {
+          creep = 0;
+          lastExcess = -1;
         }
+        lastHeight = height;
+        post(height);
       }
 
       function schedule() {
@@ -278,7 +376,10 @@ enum EmailWebScript {
         if (document.body) { observer.observe(document.body); }
       }
       window.addEventListener('load', refit);
-      window.addEventListener('resize', schedule);
+      window.addEventListener('resize', function () {
+        resized = true;
+        schedule();
+      });
       document.addEventListener('toggle', schedule, true);
       Array.prototype.forEach.call(document.images, function (image) {
         if (!image.complete) {

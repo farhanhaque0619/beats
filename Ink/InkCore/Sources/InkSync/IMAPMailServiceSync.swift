@@ -17,6 +17,11 @@ extension IMAPMailService {
     ///
     /// Summaries never download whole bodies: snippets come from the first couple of KB of the
     /// preferred text part, fetched in batches grouped by part.
+    ///
+    /// Servers with a MESSAGELIMIT (Yahoo: 1,000) cut longer replies short, SEARCH silently
+    /// (RESEARCH §3.4). There the known window is checked with `UID FETCH` in UID spans holding at
+    /// most half the limit of known messages, never with SEARCH; a reply that reaches the limit
+    /// counts as cut short and reloads the newest `limit` messages by sequence number instead.
     public func sync(mailbox: MailboxInfo, previous: MailboxSyncState?, limit: Int) async throws -> MailboxSyncResult {
         try await exclusive {
             try await self.withClient { client in
@@ -39,6 +44,7 @@ extension IMAPMailService {
 
     private func performSync(mailbox: MailboxInfo, previous: MailboxSyncState?, limit: Int, client: IMAPClient) async throws -> MailboxSyncResult {
         let condstore = await client.supports("CONDSTORE")
+        let messageLimit = Self.messageLimit(await client.capabilities)
         // Always a fresh SELECT: it reports the current UIDNEXT and HIGHESTMODSEQ.
         let info = try await client.select(mailbox.rawPath, condstore: condstore)
         let modSeq = (condstore && !info.noModSeq) ? info.highestModSeq : nil
@@ -67,7 +73,7 @@ extension IMAPMailService {
         var currentFlags: [UInt32: [String]] = [:]
         if info.exists == 0 {
             // Empty: everything known is gone (and `n:*` would be invalid on some servers).
-        } else if let modSeq, let previousModSeq = previous.highestModSeq {
+        } else if let modSeq, let previousModSeq = previous.highestModSeq, messageLimit == nil {
             if modSeq != previousModSeq {
                 let changed = try await client.fetch(.from(windowStart), byUID: true, items: [.uid, .flags], changedSince: previousModSeq)
                 for response in changed {
@@ -77,13 +83,22 @@ extension IMAPMailService {
             let found = try await client.uidSearch(.and([.uid(.from(windowStart)), .undeleted]))
             existing = Set(found.filter { $0 >= windowStart })
         } else {
-            let all = try await client.fetch(.from(windowStart), byUID: true, items: [.uid, .flags])
-            for response in all {
-                guard let uid = response.uid, uid >= windowStart else { continue }
-                let flags = response.flags ?? []
-                if MessageFlags(imapFlags: flags).contains(.deleted) { continue }
-                existing.insert(uid)
-                currentFlags[uid] = flags
+            let spans = Self.uidSpans(known: previous.knownUIDs, from: windowStart, perSpan: messageLimit.map { max(1, $0 / 2) })
+            var cutShort = false
+            for span in spans {
+                let all = try await client.fetch(span, byUID: true, items: [.uid, .flags])
+                if let messageLimit, all.count >= messageLimit { cutShort = true }
+                for response in all {
+                    guard let uid = response.uid, uid >= windowStart else { continue }
+                    let flags = response.flags ?? []
+                    if MessageFlags(imapFlags: flags).contains(.deleted) { continue }
+                    existing.insert(uid)
+                    currentFlags[uid] = flags
+                }
+            }
+            if cutShort {
+                log("A reply in \(path) reached the server's message limit and may be incomplete; loading the newest \(limit) instead.")
+                return try await resetSync(mailbox: mailbox, info: info, modSeq: modSeq, previous: previous, limit: limit, client: client)
             }
         }
         // A message flagged \Deleted is on its way out (e.g. moved by a server without MOVE).
@@ -190,6 +205,11 @@ extension IMAPMailService {
             let start = seq > count ? seq - count : 1
             summaries = try await fetchSummaries(sequence: start...(seq - 1), path: path, uidValidity: validity, client: client)
             summaries = summaries.filter { $0.uid < olderThanUID }
+        } else if let messageLimit = Self.messageLimit(await client.capabilities) {
+            // The anchor is gone, and SEARCH may be cut at the message limit: walk down in UID spans.
+            let chosen = try await olderUIDsByFetch(below: olderThanUID, limit: limit, spanWidth: messageLimit, client: client)
+            guard !chosen.isEmpty else { return [] }
+            summaries = try await fetchSummaries(uids: chosen, path: path, uidValidity: validity, client: client)
         } else {
             // The anchor is gone: find the older UIDs directly.
             let older = try await client.uidSearch(.and([.uid(IMAPSequenceSet(1...(olderThanUID - 1))), .undeleted]))
@@ -213,12 +233,74 @@ extension IMAPMailService {
         return Self.newestFirst(summaries)
     }
 
+    /// The newest `limit` UIDs below `anchor`, found with `UID FETCH` over UID spans `spanWidth`
+    /// wide (so no reply can exceed the server's message limit), walking down from the anchor.
+    private func olderUIDsByFetch(below anchor: UInt32, limit: Int, spanWidth: Int, client: IMAPClient) async throws -> [UInt32] {
+        guard anchor > 1 else { return [] }
+        let width = UInt32(clamping: max(1, spanWidth))
+        var found = Set<UInt32>()
+        var upper = anchor - 1
+        // Bounded, so a mailbox with huge UID gaps can't keep this going for long.
+        for _ in 0..<64 {
+            let lower = upper >= width ? upper - width + 1 : 1
+            let responses = try await client.fetch(IMAPSequenceSet(lower...upper), byUID: true, items: [.uid, .flags])
+            for response in responses {
+                guard let uid = response.uid, uid >= lower, uid <= upper,
+                      !MessageFlags(imapFlags: response.flags ?? []).contains(.deleted) else { continue }
+                found.insert(uid)
+            }
+            if found.count >= limit || lower <= 1 { break }
+            upper = lower - 1
+        }
+        return Array(found.sorted().suffix(limit))
+    }
+
+    // MARK: Message limits
+
+    /// The server's MESSAGELIMIT (RFC 9738; Yahoo advertises 1000): the most messages one command
+    /// handles or returns. Nil when the server announces none.
+    static func messageLimit(_ capabilities: Set<String>) -> Int? {
+        let prefix = "MESSAGELIMIT="
+        let limits = capabilities.compactMap { capability -> Int? in
+            guard capability.uppercased().hasPrefix(prefix) else { return nil }
+            return Int(capability.dropFirst(prefix.count)).flatMap { $0 > 0 ? $0 : nil }
+        }
+        return limits.min()
+    }
+
+    /// UID sets covering `windowStart` and everything above it, split so that each closed range
+    /// holds at most `perSpan` of the `known` UIDs; the last set is open (`n:*`) and also catches
+    /// new mail. Without `perSpan`, one open set.
+    static func uidSpans(known: [UInt32], from windowStart: UInt32, perSpan: Int?) -> [IMAPSequenceSet] {
+        guard let perSpan, perSpan > 0 else { return [.from(windowStart)] }
+        let sorted = Set(known.filter { $0 >= windowStart }).sorted()
+        var spans: [IMAPSequenceSet] = []
+        var lower = windowStart
+        var index = 0
+        while sorted.count - index > perSpan {
+            let upper = sorted[index + perSpan - 1]
+            spans.append(IMAPSequenceSet(lower...upper))
+            guard upper < UInt32.max else { return spans }
+            lower = upper + 1
+            index += perSpan
+        }
+        spans.append(.from(lower))
+        return spans
+    }
+
+    /// Messages per FETCH: `Options.fetchBatchSize`, but never more than the server's message limit.
+    func batchSize(_ client: IMAPClient) async -> Int {
+        let limit = Self.messageLimit(await client.capabilities) ?? Int.max
+        return max(1, min(options.fetchBatchSize, limit))
+    }
+
     // MARK: Fetching summaries
 
     /// Summaries (with snippets) for messages by UID, in batches.
     func fetchSummaries(uids: [UInt32], path: String, uidValidity: UInt32, client: IMAPClient) async throws -> [MessageSummary] {
         var responses: [IMAPFetchResponse] = []
-        for chunk in Self.chunks(uids.sorted(), size: options.fetchBatchSize) {
+        let batchSize = await batchSize(client)
+        for chunk in Self.chunks(uids.sorted(), size: batchSize) {
             responses += try await fetchSummaryResponses(IMAPSequenceSet(chunk), byUID: true, client: client)
         }
         return try await summaries(from: responses, path: path, uidValidity: uidValidity, client: client)
@@ -227,7 +309,7 @@ extension IMAPMailService {
     /// Summaries (with snippets) for a range of sequence numbers, in batches.
     func fetchSummaries(sequence range: ClosedRange<UInt32>, path: String, uidValidity: UInt32, client: IMAPClient) async throws -> [MessageSummary] {
         var responses: [IMAPFetchResponse] = []
-        let batch = UInt64(max(1, options.fetchBatchSize))
+        let batch = UInt64(await batchSize(client))
         var lower = range.lowerBound
         while true {
             let upper = UInt32(min(UInt64(range.upperBound), UInt64(lower) + batch - 1))
@@ -278,9 +360,10 @@ extension IMAPMailService {
         var groups: [String: [UInt32]] = [:]
         for (uid, target) in targets { groups[target.groupKey, default: []].append(uid) }
         var snippets: [UInt32: String] = [:]
+        let batchSize = await batchSize(client)
         for key in groups.keys.sorted() {
             guard let uids = groups[key], let sample = uids.first.flatMap({ targets[$0] }) else { continue }
-            for chunk in Self.chunks(uids.sorted(), size: options.fetchBatchSize) {
+            for chunk in Self.chunks(uids.sorted(), size: batchSize) {
                 let set = IMAPSequenceSet(chunk)
                 let usePartial = !partialFetchBroken
                 let item = IMAPFetchItem.bodyPeek(section: sample.section, partial: usePartial ? (0, sample.length) : nil)

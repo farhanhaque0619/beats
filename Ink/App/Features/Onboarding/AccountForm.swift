@@ -324,11 +324,17 @@ struct OnboardingAccountForm: View {
         if !auth.allowsPassword {
             return "Microsoft only lets mail apps in with Sign in with Microsoft."
         }
+        if guideID == .other, Self.protonDomains.contains(address.domain) {
+            return "Proton Mail has no IMAP of its own, so Ink can't connect to it directly."
+        }
         if guideID == .other {
             return "Ink finds your server settings from your address."
         }
         return "Ink signs in with an app password: a separate password just for Ink that you can revoke any time."
     }
+
+    /// Proton's own domains: no IMAP without Proton Mail Bridge (RESEARCH §2.2).
+    private static let protonDomains: Set<String> = ["proton.me", "protonmail.com", "protonmail.ch", "pm.me"]
 
     private var notes: [String] {
         if !provider.notes.isEmpty { return provider.notes }
@@ -473,7 +479,8 @@ struct OnboardingAccountForm: View {
                 imap = OnboardingServerFields(result.imap)
                 smtp = OnboardingServerFields(result.smtp)
                 discoveryStatus = .found(source: result.source)
-                showsServerSettings = false
+                // A guess (imap.<domain>) is worth checking before connecting.
+                showsServerSettings = result.isGuess
             } else {
                 imap = OnboardingServerFields(host: "imap.\(domain)", port: 993, security: .tls, username: target)
                 smtp = OnboardingServerFields(host: "smtp.\(domain)", port: 465, security: .tls, username: target)

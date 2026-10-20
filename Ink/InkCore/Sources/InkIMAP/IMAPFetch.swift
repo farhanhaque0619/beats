@@ -189,23 +189,25 @@ public struct IMAPFetchResponse: Hashable, Sendable {
 
     /// Canonical form of a section spec: uppercased, quotes dropped, whitespace collapsed and
     /// trimmed inside parentheses. `"header.fields ( \"From\"  To )"` → `"HEADER.FIELDS (FROM TO)"`.
+    ///
+    /// Works on Unicode scalars, not Characters: Swift treats `"\r\n"` as one Character, which
+    /// would match neither `"\r"` nor `"\n"`.
     public static func sectionKey(_ spec: String) -> String {
-        var output: [Character] = []
-        output.reserveCapacity(spec.count)
+        var output = String.UnicodeScalarView()
         var pendingSpace = false
-        for character in spec.uppercased() {
-            switch character {
+        for scalar in spec.uppercased().unicodeScalars {
+            switch scalar {
             case "\"":
                 continue
             case " ", "\t", "\r", "\n":
                 pendingSpace = true
             case ")":
                 pendingSpace = false
-                output.append(character)
+                output.append(scalar)
             default:
                 if pendingSpace, let last = output.last, last != "(" { output.append(" ") }
                 pendingSpace = false
-                output.append(character)
+                output.append(scalar)
             }
         }
         return String(output)

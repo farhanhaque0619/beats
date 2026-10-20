@@ -25,8 +25,12 @@ struct ComposeView: View {
     @State private var bodySelection: TextSelection? = nil
     @State private var isConfirmingDiscard = false
     @State private var isConfirmingNoSubject = false
+    /// Recipients that can't be sent to (invalid tokens, leftover text), asked about on Send.
+    @State private var recipientProblems: [String] = []
+    @State private var isConfirmingProblems = false
     @State private var isImportingFiles = false
-    @State private var isLoadingAttachments = false
+    /// Imports still reading files (several can overlap).
+    @State private var attachmentLoads = 0
     @State private var attachmentNote: String? = nil
     #if os(iOS)
     @State private var isPickingPhotos = false
@@ -54,16 +58,6 @@ struct ComposeView: View {
         }
         .background(Ink.surface)
         .interactiveDismissDisabled(hasChanges)
-        .confirmationDialog("Discard this draft?", isPresented: $isConfirmingDiscard, titleVisibility: .visible) {
-            Button("Discard", role: .destructive) { dismiss() }
-            Button("Keep editing", role: .cancel) {}
-        } message: {
-            Text("What you’ve written won’t be saved.")
-        }
-        .confirmationDialog("Send without a subject?", isPresented: $isConfirmingNoSubject, titleVisibility: .visible) {
-            Button("Send anyway") { deliver() }
-            Button("Add a subject", role: .cancel) { focus = .subject }
-        }
         .fileImporter(isPresented: $isImportingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             handleImport(result)
         }
@@ -95,8 +89,15 @@ struct ComposeView: View {
 
     private var topBar: some View {
         HStack(spacing: InkSpace.xs) {
+            // Dialogs hang off the control that opened them, so on iOS 26 they point at it.
             IconButton("xmark", label: "Close", action: close)
                 .keyboardShortcut(.cancelAction)
+                .confirmationDialog("Discard this draft?", isPresented: $isConfirmingDiscard, titleVisibility: .visible) {
+                    Button("Discard", role: .destructive) { dismiss() }
+                    Button("Keep editing", role: .cancel) {}
+                } message: {
+                    Text("What you’ve written won’t be saved.")
+                }
             Spacer(minLength: InkSpace.s)
             attachButton
             sendButton
@@ -106,6 +107,9 @@ struct ComposeView: View {
                 .font(InkFont.headline)
                 .foregroundStyle(Ink.primary)
                 .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                // Centred, but never under the buttons on either side.
+                .padding(.horizontal, 128)
                 .allowsHitTesting(false)
                 .accessibilityAddTraits(.isHeader)
         }
@@ -129,6 +133,32 @@ struct ComposeView: View {
         .accessibilityLabel("Send")
         #if os(macOS)
         .help("Send (⌘↩)")
+        #endif
+        .confirmationDialog(problemTitle, isPresented: $isConfirmingProblems, titleVisibility: .visible) {
+            Button(recipientProblems.count == 1 ? "Send without it" : "Send without them") { dropProblemsAndSend() }
+            Button("Fix", role: .cancel) { focusFirstProblem() }
+        } message: {
+            Text(problemMessage)
+        }
+        .background {
+            // Its own view: two dialogs on one view can clash.
+            Color.clear
+                .confirmationDialog("Send without a subject?", isPresented: $isConfirmingNoSubject, titleVisibility: .visible) {
+                    Button("Send anyway") { deliver() }
+                    Button("Add a subject", role: .cancel) { focus = .subject }
+                }
+        }
+        #if os(macOS)
+        .background {
+            // Mail's other Send shortcut, ⇧⌘D.
+            Button(action: send) { EmptyView() }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(!canSend)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .focusable(false)
+                .accessibilityHidden(true)
+        }
         #endif
     }
 
@@ -295,7 +325,8 @@ struct ComposeView: View {
             .font(bodyFont)
             .lineSpacing(3)
             .padding(bodyTextInsets)
-            .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
+            // Room to tap into, but a reply's quote stays close under what you write.
+            .frame(maxWidth: .infinity, minHeight: hasQuote ? 140 : 240, alignment: .topLeading)
             .opacity(0)
             .accessibilityHidden(true)
             .overlay(alignment: .topLeading) { bodyPlaceholder }
@@ -344,10 +375,10 @@ struct ComposeView: View {
                 .padding(.horizontal, InkSpace.gutter)
                 .padding(.vertical, InkSpace.s)
         }
-        if !draft.attachments.isEmpty || isLoadingAttachments || attachmentNote != nil {
+        if !draft.attachments.isEmpty || attachmentLoads > 0 || attachmentNote != nil {
             ComposeAttachmentStrip(
                 attachments: draft.attachments,
-                isLoading: isLoadingAttachments,
+                isLoading: attachmentLoads > 0,
                 note: attachmentNote,
                 onRemove: removeAttachment
             )
@@ -375,6 +406,8 @@ struct ComposeView: View {
     private var bodyFont: Font {
         settings.readingFont == .serif ? InkFont.readerBodySerif : InkFont.readerBody
     }
+
+    private var hasQuote: Bool { !(draft.quotedText ?? "").isEmpty }
 
     /// Where the text editor draws its first glyph, so the placeholder and the sizing copy line up.
     private var bodyTextInsets: EdgeInsets {
@@ -421,10 +454,81 @@ struct ComposeView: View {
     private func send() {
         commitPendingRecipients()
         guard canSend else { return }
+        // A red token or half-typed text would otherwise just be left out without a word.
+        let problems = currentRecipientProblems
+        if !problems.isEmpty {
+            recipientProblems = problems
+            isConfirmingProblems = true
+            Haptics.warning()
+            return
+        }
+        confirmSubjectThenDeliver()
+    }
+
+    private func confirmSubjectThenDeliver() {
         if draft.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             isConfirmingNoSubject = true
         } else {
             deliver()
+        }
+    }
+
+    /// Invalid tokens and typed text that isn't an address, as the person wrote them.
+    private var currentRecipientProblems: [String] {
+        let invalid = (draft.to + draft.cc + draft.bcc).filter { !$0.isValid }.map(\.address)
+        let leftovers = [pendingTo, pendingCc, pendingBcc]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return invalid + leftovers
+    }
+
+    private var problemTitle: String {
+        if recipientProblems.count == 1 { return "“\(recipientProblems[0])” isn’t an email address" }
+        return "\(recipientProblems.count) recipients aren’t email addresses"
+    }
+
+    private var problemMessage: String {
+        recipientProblems.count == 1
+            ? "Ink can’t send to it. Send to the others, or fix it first."
+            : "Ink can’t send to them: \(recipientProblems.joined(separator: ", ")). Send to the others, or fix them first."
+    }
+
+    private func dropProblemsAndSend() {
+        draft.to.removeAll { !$0.isValid }
+        draft.cc.removeAll { !$0.isValid }
+        draft.bcc.removeAll { !$0.isValid }
+        pendingTo = ""
+        pendingCc = ""
+        pendingBcc = ""
+        guard draft.hasRecipients else { return }
+        if draft.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Task {
+                // Let this dialog finish closing before the next one opens.
+                try? await Task.sleep(for: .milliseconds(450))
+                isConfirmingNoSubject = true
+            }
+        } else {
+            deliver()
+        }
+    }
+
+    private func focusFirstProblem() {
+        let fields: [(ComposeField, [EmailAddress], String)] = [
+            (.to, draft.to, pendingTo), (.cc, draft.cc, pendingCc), (.bcc, draft.bcc, pendingBcc),
+        ]
+        let first = fields.first { _, tokens, pending in
+            tokens.contains { !$0.isValid } || !pending.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let target = first?.0 ?? .to
+        guard target != .to, !showsCcBcc else {
+            focus = target
+            return
+        }
+        withAnimation(InkMotion.snappy) { showsCcBcc = true }
+        Task {
+            // Let the new fields exist before moving focus into them.
+            try? await Task.sleep(for: .milliseconds(60))
+            focus = target
         }
     }
 
@@ -440,23 +544,29 @@ struct ComposeView: View {
         dismiss()
     }
 
-    /// Typed-but-uncommitted addresses count as recipients when sending.
+    /// Typed-but-uncommitted addresses count as recipients when sending. Text that isn't an
+    /// address stays in its field, for `send()` to ask about.
     private func commitPendingRecipients() {
-        let to = ComposeAddressParsing.addresses(in: pendingTo)
-        if !to.isEmpty {
-            draft.to = (draft.to + to).uniqued()
-            pendingTo = ""
+        if let to = Self.committing(pendingTo, into: draft.to) {
+            draft.to = to.recipients
+            pendingTo = to.pending
         }
-        let cc = ComposeAddressParsing.addresses(in: pendingCc)
-        if !cc.isEmpty {
-            draft.cc = (draft.cc + cc).uniqued()
-            pendingCc = ""
+        if let cc = Self.committing(pendingCc, into: draft.cc) {
+            draft.cc = cc.recipients
+            pendingCc = cc.pending
         }
-        let bcc = ComposeAddressParsing.addresses(in: pendingBcc)
-        if !bcc.isEmpty {
-            draft.bcc = (draft.bcc + bcc).uniqued()
-            pendingBcc = ""
+        if let bcc = Self.committing(pendingBcc, into: draft.bcc) {
+            draft.bcc = bcc.recipients
+            pendingBcc = bcc.pending
         }
+    }
+
+    /// `recipients` plus the addresses in `pending`, and what's left of `pending`; nil when
+    /// `pending` holds no address.
+    private static func committing(_ pending: String, into recipients: [EmailAddress]) -> (recipients: [EmailAddress], pending: String)? {
+        let parsed = ComposeAddressParsing.split(pending)
+        guard !parsed.addresses.isEmpty else { return nil }
+        return ((recipients + parsed.addresses).uniqued(), parsed.leftovers.joined(separator: " "))
     }
 
     private func revealCcBcc() {
@@ -474,7 +584,12 @@ struct ComposeView: View {
         let previous = currentAccount
         draft.accountID = account.id
         draft.from = account.address
-        draft.body = ComposeSignature.swap(in: draft.body, from: previous?.signature, to: account.signature)
+        draft.body = ComposeSignature.swap(
+            in: draft.body,
+            from: previous?.signature,
+            to: account.signature,
+            block: store.signatureBlock(for: account)
+        )
         Haptics.tick()
     }
 
@@ -504,12 +619,10 @@ struct ComposeView: View {
 
     private func addFiles(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
-        isLoadingAttachments = true
+        withAnimation(InkMotion.snappy) { attachmentLoads += 1 }
         Task {
-            let loaded = await ComposeAttachmentLoader.attachments(from: urls)
-            isLoadingAttachments = false
-            appendAttachments(loaded)
-            noteFailures(urls.count - loaded.count, noun: "file")
+            let results = await ComposeAttachmentLoader.attachments(from: urls)
+            finishLoading(results, noun: "file")
         }
     }
 
@@ -517,21 +630,32 @@ struct ComposeView: View {
     private func loadPhotos(_ items: [PhotosPickerItem]) {
         guard !items.isEmpty else { return }
         photoItems = []
-        isLoadingAttachments = true
+        withAnimation(InkMotion.snappy) { attachmentLoads += 1 }
         let firstNumber = draft.attachments.count + 1
         Task {
-            var loaded: [OutgoingAttachment] = []
+            var results: [ComposeAttachmentLoad] = []
             for (offset, item) in items.enumerated() {
-                if let attachment = await ComposeAttachmentLoader.attachment(from: item, number: firstNumber + offset) {
-                    loaded.append(attachment)
-                }
+                results.append(await ComposeAttachmentLoader.attachment(from: item, number: firstNumber + offset))
             }
-            isLoadingAttachments = false
-            appendAttachments(loaded)
-            noteFailures(items.count - loaded.count, noun: "item")
+            finishLoading(results, noun: "item")
         }
     }
     #endif
+
+    private func finishLoading(_ results: [ComposeAttachmentLoad], noun: String) {
+        withAnimation(InkMotion.snappy) { attachmentLoads = max(attachmentLoads - 1, 0) }
+        appendAttachments(results.compactMap(\.attachment))
+        var oversized: [(name: String, bytes: Int)] = []
+        var failed = 0
+        for result in results {
+            switch result {
+            case .attached: break
+            case .tooLarge(let name, let bytes): oversized.append((name: name, bytes: bytes))
+            case .failed: failed += 1
+            }
+        }
+        noteProblems(tooLarge: oversized, failed: failed, noun: noun)
+    }
 
     private func appendAttachments(_ added: [OutgoingAttachment]) {
         guard !added.isEmpty else { return }
@@ -540,9 +664,20 @@ struct ComposeView: View {
         Haptics.tick()
     }
 
-    private func noteFailures(_ count: Int, noun: String) {
-        guard count > 0 else { return }
-        attachmentNote = count == 1 ? "Couldn’t attach one \(noun)." : "Couldn’t attach \(count) \(noun)s."
+    private func noteProblems(tooLarge: [(name: String, bytes: Int)], failed: Int, noun: String) {
+        var sentences: [String] = []
+        if tooLarge.count == 1, let only = tooLarge.first {
+            sentences.append("“\(only.name)” is too big to email (\(InkFormat.fileSize(only.bytes))).")
+        } else if tooLarge.count > 1 {
+            sentences.append("\(tooLarge.count) \(noun)s are too big to email.")
+        }
+        if failed == 1 {
+            sentences.append("Couldn’t attach one \(noun).")
+        } else if failed > 1 {
+            sentences.append("Couldn’t attach \(failed) \(noun)s.")
+        }
+        guard !sentences.isEmpty else { return }
+        withAnimation(InkMotion.snappy) { attachmentNote = sentences.joined(separator: " ") }
         Haptics.warning()
     }
 
@@ -556,12 +691,19 @@ struct ComposeView: View {
 /// Keeps the signature in step with the From account.
 private enum ComposeSignature {
     /// Replaces `old` with `new` in the body when the old signature is there. With no new
-    /// signature, the old one goes, along with its "-- " separator.
-    static func swap(in body: String, from old: String?, to new: String?) -> String {
+    /// signature, the old one goes, along with its "-- " separator. With no old one, the new
+    /// account's `block` (separator and signature) goes at the end.
+    static func swap(in body: String, from old: String?, to new: String?, block: String) -> String {
         let oldSignature = (old ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let newSignature = (new ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !oldSignature.isEmpty, oldSignature != newSignature,
-              let range = body.range(of: oldSignature, options: .backwards) else { return body }
+        guard oldSignature != newSignature else { return body }
+        if oldSignature.isEmpty {
+            guard !block.isEmpty else { return body }
+            var head = body
+            trimTrailingWhitespace(&head)
+            return head + block
+        }
+        guard let range = body.range(of: oldSignature, options: .backwards) else { return body }
         if !newSignature.isEmpty {
             return body.replacingCharacters(in: range, with: newSignature)
         }

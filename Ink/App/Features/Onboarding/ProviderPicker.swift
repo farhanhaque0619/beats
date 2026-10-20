@@ -76,7 +76,7 @@ struct OnboardingProviderPicker: View {
         #if os(iOS)
         return "Proton Mail can't connect on iPhone: Proton has no IMAP, and Proton Mail Bridge only runs on computers."
         #else
-        return "Proton Mail has no IMAP of its own. Proton Mail Bridge adds it on a Mac: run Bridge, then choose Other and enter the details it shows."
+        return "Proton Mail can't connect yet: Proton has no IMAP of its own, and Ink doesn't work with Proton Mail Bridge's certificate yet."
         #endif
     }
 }

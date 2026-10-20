@@ -35,6 +35,25 @@ enum IMAPText {
         decode([UInt8](data))
     }
 
+    /// Whether `needle` occurs in `haystack`, compared byte for byte (ASCII letters ignoring
+    /// case). `String.contains(String)` resolves to different algorithms on Apple platforms
+    /// (Character-level) and Linux (Foundation), so protocol text uses this instead.
+    static func contains(_ haystack: String, _ needle: String, ignoringASCIICase: Bool = false) -> Bool {
+        let source = Array(haystack.utf8)
+        let target = Array(needle.utf8)
+        guard !target.isEmpty else { return true }
+        guard source.count >= target.count else { return false }
+        func fold(_ byte: UInt8) -> UInt8 {
+            ignoringASCIICase && byte >= 0x41 && byte <= 0x5A ? byte + 0x20 : byte
+        }
+        for start in 0...(source.count - target.count) {
+            var offset = 0
+            while offset < target.count, fold(source[start + offset]) == fold(target[offset]) { offset += 1 }
+            if offset == target.count { return true }
+        }
+        return false
+    }
+
     static func latin1(_ bytes: [UInt8]) -> String {
         var scalars = String.UnicodeScalarView()
         scalars.reserveCapacity(bytes.count)
@@ -237,12 +256,17 @@ struct IMAPReader {
     /// An atom-like token. A fetch attribute's section is kept whole, spaces and parentheses
     /// included, so `BODY[HEADER.FIELDS (A B)]<0>` is one token; elsewhere brackets are ordinary
     /// characters (`[Gmail]/Sent`), so a stray `[` can't swallow the rest of the line.
+    /// A literal announced right after the token with no space (`BODY[1]<0>{22}`, as GreenMail
+    /// sends it) ends the token, so the literal is read as the next value.
     mutating func readAtom() -> String {
         let start = position
         while position < end {
             let byte = bytes[position]
             if byte == Byte.space || byte == Byte.tab || byte == Byte.openParen || byte == Byte.closeParen
                 || byte == Byte.cr || byte == Byte.lf || byte == Byte.quote {
+                break
+            }
+            if position > start, byte == Byte.openBrace || byte == Byte.tilde, isLiteralHeader(at: position) {
                 break
             }
             if byte == Byte.openBracket, Self.isSectionAttribute(bytes, from: start, to: position) {
@@ -308,6 +332,26 @@ struct IMAPReader {
             position += 1
         }
         return Data(output)
+    }
+
+    /// Whether a literal header (`{n}`, `{n+}` or literal8 `~{n}`) followed by the line break
+    /// starts at `index`. Atoms can't contain `{`, so this only ever ends a malformed token.
+    func isLiteralHeader(at index: Int) -> Bool {
+        var cursor = index
+        if cursor < end, bytes[cursor] == Byte.tilde { cursor += 1 }
+        guard cursor < end, bytes[cursor] == Byte.openBrace else { return false }
+        cursor += 1
+        var digits = 0
+        while cursor < end, Byte.isDigit(bytes[cursor]) {
+            digits += 1
+            cursor += 1
+        }
+        guard digits > 0, digits <= 12 else { return false }
+        if cursor < end, bytes[cursor] == Byte.plus { cursor += 1 }
+        guard cursor < end, bytes[cursor] == Byte.closeBrace else { return false }
+        cursor += 1
+        if cursor < end, bytes[cursor] == Byte.cr { cursor += 1 }
+        return cursor < end && bytes[cursor] == Byte.lf
     }
 
     /// `{n}` / `{n+}` + CRLF + n bytes. Returns nil (consuming nothing) if this isn't a literal.

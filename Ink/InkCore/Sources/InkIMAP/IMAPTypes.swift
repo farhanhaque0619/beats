@@ -79,6 +79,9 @@ public struct IMAPSelectInfo: Hashable, Sendable {
     public var flags: [String]
     /// Flags the client may change permanently; `\*` means new keywords are allowed.
     public var permanentFlags: [String]
+    /// Whether the server reported `[PERMANENTFLAGS]` at all. Without it, RFC 3501 says to
+    /// assume every flag can be stored.
+    public var hasPermanentFlags: Bool
     /// Opened with EXAMINE, or the server reported `[READ-ONLY]`.
     public var readOnly: Bool
     /// Sequence number of the first unseen message (`[UNSEEN n]`), if sent.
@@ -88,7 +91,7 @@ public struct IMAPSelectInfo: Hashable, Sendable {
 
     public init(mailbox: String, exists: UInt32 = 0, recent: UInt32 = 0, uidValidity: UInt32 = 0, uidNext: UInt32? = nil,
                 highestModSeq: UInt64? = nil, flags: [String] = [], permanentFlags: [String] = [], readOnly: Bool = false,
-                firstUnseen: UInt32? = nil, noModSeq: Bool = false) {
+                firstUnseen: UInt32? = nil, noModSeq: Bool = false, hasPermanentFlags: Bool? = nil) {
         self.mailbox = mailbox
         self.exists = exists
         self.recent = recent
@@ -97,9 +100,25 @@ public struct IMAPSelectInfo: Hashable, Sendable {
         self.highestModSeq = highestModSeq
         self.flags = flags
         self.permanentFlags = permanentFlags
+        self.hasPermanentFlags = hasPermanentFlags ?? !permanentFlags.isEmpty
         self.readOnly = readOnly
         self.firstUnseen = firstUnseen
         self.noModSeq = noModSeq
+    }
+}
+
+extension IMAPSelectInfo {
+    /// PERMANENTFLAGS lists `\*`: the client may create new keywords.
+    public var allowsNewKeywords: Bool { permanentFlags.contains("\\*") }
+
+    /// Whether a keyword (a flag without a backslash, such as `$Forwarded` or `$Junk`) can be
+    /// stored permanently here: PERMANENTFLAGS wasn't reported, or it lists `\*` or the keyword.
+    /// Exchange lists neither, so custom keywords fail there (RESEARCH §3.4). System flags
+    /// (`\Seen`, `\Deleted`, …) are always true.
+    public func canStore(_ flag: String) -> Bool {
+        if flag.utf8.first == UInt8(ascii: "\\") { return true }
+        if !hasPermanentFlags || allowsNewKeywords { return true }
+        return permanentFlags.contains { $0.caseInsensitiveCompare(flag) == .orderedSame }
     }
 }
 

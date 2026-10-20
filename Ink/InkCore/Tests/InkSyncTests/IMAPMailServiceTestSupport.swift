@@ -26,7 +26,9 @@ enum IMAPServiceFixtures {
                       authMethod: authMethod, savesSentAutomatically: savesSentAutomatically)
     }
 
-    static let fastOptions = IMAPMailService.Options(timeout: 3, reconnectDelays: [0.05], maxWatchFailures: 2, clientID: nil)
+    /// Short timers; no looking for the server's Sent copy (tests that want it set the delays).
+    static let fastOptions = IMAPMailService.Options(timeout: 3, reconnectDelays: [0.05], maxWatchFailures: 2, clientID: nil,
+                                                     sentCopyPollDelays: [], sentCopyPatientPollDelays: [])
 
     /// A service whose connections come from `transports`, in order.
     static func service(_ account: AccountConfig, credential: Credential = .password("correct horse"),

@@ -46,6 +46,8 @@ enum OAuthSignIn {
         }
 
         let code = try authorizationCode(in: callback, expectedState: state)
+        // The sheet that started this went away while the browser was up: stop quietly.
+        if Task.isCancelled { throw MailError.cancelled }
         let redeemed = try await redeem(code: code, configuration: configuration, pkce: pkce)
         let claims = redeemed.idToken.map { identityClaims(in: $0) } ?? [:]
         return OAuthSignInResult(token: redeemed.token, email: email(in: claims), name: name(in: claims))
@@ -88,7 +90,7 @@ enum OAuthSignIn {
     // MARK: Token request
 
     private static func redeem(code: String, configuration: OAuthConfiguration, pkce: PKCE) async throws -> (token: OAuthToken, idToken: String?) {
-        var request = URLRequest(url: configuration.tokenEndpoint)
+        var request = URLRequest(url: configuration.tokenEndpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -106,10 +108,23 @@ enum OAuthSignIn {
         do {
             response = try await urlSession.data(for: request)
         } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                throw MailError.cancelled
+            }
             throw MailError.oauth("Couldn't reach the sign-in server. \(error.localizedDescription)")
         }
         let data = response.0
-        let token = try OAuthClient.parseTokenResponse(data, previous: nil, now: Date())
+        let status = (response.1 as? HTTPURLResponse)?.statusCode ?? 200
+        let token: OAuthToken
+        do {
+            token = try OAuthClient.parseTokenResponse(data, previous: nil, now: Date())
+        } catch let error as MailError {
+            // An error page that isn't JSON: say what happened instead of "couldn't read".
+            if !(200..<300).contains(status), case .oauth(let detail) = error, detail.hasPrefix("The sign-in server sent a reply") {
+                throw MailError.oauth("The sign-in server answered with an error (HTTP \(status)). Try again in a moment.")
+            }
+            throw error
+        }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         return (token, json?["id_token"] as? String)
     }

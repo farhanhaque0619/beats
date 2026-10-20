@@ -17,7 +17,8 @@ extension IMAPMailService {
     @discardableResult
     func loadMailboxes(_ client: IMAPClient) async throws -> [MailboxInfo] {
         let listed = try await client.listMailboxes()
-        let infos = IMAPMailServiceRoles.mailboxInfos(from: listed, accountID: account.id)
+        let isGmail = await client.isGmail
+        let infos = IMAPMailServiceRoles.mailboxInfos(from: listed, accountID: account.id, isGmail: isGmail)
         mailboxCache = infos
         return infos
     }
@@ -94,6 +95,11 @@ extension IMAPMailService {
 
 /// Maps LIST results to `MailboxInfo`s: roles from SPECIAL-USE (RFC 6154) or Gmail's XLIST
 /// attributes first, then well-known folder names in several languages, one folder per role.
+///
+/// Gmail is the exception: its system folders live under `[Gmail]` or, on older UK and German
+/// accounts, `[Google Mail]`, with localized names, and every other folder is a user label that
+/// may be called "Archive" or "Sent". So on Gmail only the attributes count (RESEARCH §3.4), and
+/// a role whose folder is hidden from IMAP (All Mail, when "Show in IMAP" is off) stays missing.
 enum IMAPMailServiceRoles {
     /// Well-known names per role, lowercased, best first. Matched against the last path component
     /// of top-level folders and of folders directly under INBOX (Courier/cPanel style
@@ -142,8 +148,9 @@ enum IMAPMailServiceRoles {
         }
     }
 
-    /// LIST results → sorted `MailboxInfo`s with one folder per system role.
-    static func mailboxInfos(from mailboxes: [IMAPMailbox], accountID: String) -> [MailboxInfo] {
+    /// LIST results → sorted `MailboxInfo`s with one folder per system role. `isGmail` turns off
+    /// matching by name.
+    static func mailboxInfos(from mailboxes: [IMAPMailbox], accountID: String, isGmail: Bool = false) -> [MailboxInfo] {
         var infos: [MailboxInfo] = []
         var claimed = Set<MailboxRole>()
         var inboxSeen = false
@@ -168,6 +175,8 @@ enum IMAPMailServiceRoles {
         }
 
         // Well-known names for roles no attribute claimed: best name, then shallowest, wins.
+        // Never on Gmail, where such names are user labels.
+        guard !isGmail else { return sorted(infos) }
         var best: [MailboxRole: (index: Int, score: Int)] = [:]
         for (index, info) in infos.enumerated() where info.role == .custom && info.isSelectable {
             guard let (role, score) = wellKnownRole(for: info), !claimed.contains(role) else { continue }

@@ -3,6 +3,7 @@ import InkModel
 import InkIMAP
 import InkSMTP
 import InkMIME
+import InkProviders
 
 /// The `MailService` for real accounts: IMAP for reading and organising mail, SMTP for sending.
 ///
@@ -40,7 +41,12 @@ public actor IMAPMailService: MailService {
         public var maxIdleReuse: TimeInterval
         /// How long one IDLE lasts before it is renewed (servers end IDLE after ~30 minutes).
         public var idleRefresh: TimeInterval
-        /// How often `watch` polls with NOOP when the server has no IDLE.
+        /// IDLE renewal on Gmail, which drops connections idle for about 10 minutes (RESEARCH §3.5).
+        public var gmailIdleRefresh: TimeInterval
+        /// On servers whose IDLE doesn't report deletions (Yahoo, AOL; RESEARCH §3.4), IDLE is
+        /// renewed this often and each renewal reports `.changed`, so a re-sync notices them.
+        public var deletionCheckInterval: TimeInterval
+        /// How often `watch` polls with NOOP when the server has no IDLE (or refuses it).
         public var pollInterval: TimeInterval
         /// Waits between reconnection attempts in `watch`; the last one repeats.
         public var reconnectDelays: [TimeInterval]
@@ -52,12 +58,19 @@ public actor IMAPMailService: MailService {
         public var searchBodies: Bool
         /// Host name announced in SMTP EHLO.
         public var localHostname: String
+        /// Waits before each look for the server's own Sent copy after sending, on an account
+        /// not known to file one (RESEARCH §3.8: 0, 1, 1, 2 s). Empty uploads Ink's copy at once.
+        public var sentCopyPollDelays: [TimeInterval]
+        /// The same once this session has seen the server file a copy (it can be late: §3.8).
+        public var sentCopyPatientPollDelays: [TimeInterval]
 
         public init(timeout: TimeInterval = 30, snippetBytes: Int = 2048, htmlSnippetBytes: Int = 4096, fetchBatchSize: Int = 100,
-                    maxIdleReuse: TimeInterval = 10 * 60, idleRefresh: TimeInterval = 25 * 60, pollInterval: TimeInterval = 120,
+                    maxIdleReuse: TimeInterval = 10 * 60, idleRefresh: TimeInterval = 25 * 60, pollInterval: TimeInterval = 180,
                     reconnectDelays: [TimeInterval] = [2, 5, 15, 30, 60], maxWatchFailures: Int = 5,
                     clientID: [String: String]? = ["name": "Ink", "version": "1.0"], searchBodies: Bool = true,
-                    localHostname: String = "localhost") {
+                    localHostname: String = "localhost", gmailIdleRefresh: TimeInterval = 9 * 60,
+                    deletionCheckInterval: TimeInterval = 5 * 60, sentCopyPollDelays: [TimeInterval] = [0, 1, 1, 2],
+                    sentCopyPatientPollDelays: [TimeInterval] = [0, 1, 1, 2, 2, 3, 3]) {
             self.timeout = timeout
             self.snippetBytes = snippetBytes
             self.htmlSnippetBytes = htmlSnippetBytes
@@ -70,6 +83,10 @@ public actor IMAPMailService: MailService {
             self.clientID = clientID
             self.searchBodies = searchBodies
             self.localHostname = localHostname
+            self.gmailIdleRefresh = gmailIdleRefresh
+            self.deletionCheckInterval = deletionCheckInterval
+            self.sentCopyPollDelays = sentCopyPollDelays
+            self.sentCopyPatientPollDelays = sentCopyPatientPollDelays
         }
     }
 
@@ -90,6 +107,9 @@ public actor IMAPMailService: MailService {
     var memos: [String: IMAPMailServiceMemo] = [:]
     /// The server mangles partial fetches (`BODY[1]<0.2048>`); snippets then fetch whole text parts.
     var partialFetchBroken = false
+    /// Whether this session has seen the server file its own copy of sent mail in Sent (nil:
+    /// not known yet). Decides how long `send` looks for that copy before uploading one.
+    public internal(set) var serverSavesSentCopies: Bool?
 
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -115,20 +135,26 @@ public actor IMAPMailService: MailService {
 
     /// Connects and signs in to IMAP, lists the folders, connects and signs in to SMTP, then
     /// says goodbye to both. Uses its own connections, so it works before anything is saved.
+    ///
+    /// iCloud takes either the name part or the full address as the IMAP user name; when the
+    /// configured form is refused, the other is tried once (`verifiedAccount` then has the one
+    /// that worked, for the caller to save). Refusals from the big providers come back as
+    /// `MailError`s whose detail says what to do (`ProviderErrorAdvice`).
     public func verify(progress: @escaping @Sendable (VerificationStep) -> Void) async throws {
         progress(.connectingIMAP)
-        let imap = connector.makeIMAPClient()
+        var imap = connector.makeIMAPClient()
         do {
             try await imap.connect()
             progress(.signingInIMAP)
-            try await connector.authenticate(imap)
+            imap = try await connector.signIn(imap)
             progress(.loadingMailboxes)
             let listed = try await imap.listMailboxes()
-            mailboxCache = IMAPMailServiceRoles.mailboxInfos(from: listed, accountID: account.id)
+            let isGmail = await imap.isGmail
+            mailboxCache = IMAPMailServiceRoles.mailboxInfos(from: listed, accountID: account.id, isGmail: isGmail)
             await imap.logout()
         } catch {
             await imap.disconnect()
-            throw Self.mailError(error)
+            throw connector.advise(error, server: .imap)
         }
 
         progress(.connectingSMTP)
@@ -140,9 +166,18 @@ public actor IMAPMailService: MailService {
             await smtp.quit()
         } catch {
             await smtp.quit()
-            throw Self.mailError(error)
+            throw connector.advise(error, server: .smtp)
         }
         progress(.done)
+    }
+
+    /// `account` with the IMAP user name that last signed in successfully. Differs from
+    /// `account` only for iCloud, when the other user name form worked (see `verify`);
+    /// callers should save this version so later sessions don't start with the refused form.
+    public nonisolated var verifiedAccount: AccountConfig {
+        var result = account
+        if let confirmed = connector.usernames.confirmed { result.imap.username = confirmed }
+        return result
     }
 
     // MARK: - Disconnect
@@ -166,7 +201,7 @@ public actor IMAPMailService: MailService {
         do {
             return try await operation()
         } catch {
-            throw Self.mailError(error)
+            throw connector.advise(error, server: .imap)
         }
     }
 
@@ -282,6 +317,17 @@ struct IMAPMailServiceConnector: Sendable {
     let transportFactory: MailTransportFactory
     let options: IMAPMailService.Options
     let logger: (@Sendable (String) -> Void)?
+    /// The IMAP user name that worked, shared by every connection of the service.
+    let usernames = IMAPMailServiceUsernameMemory()
+
+    init(account: AccountConfig, credentials: CredentialStore, transportFactory: @escaping MailTransportFactory,
+         options: IMAPMailService.Options, logger: (@Sendable (String) -> Void)?) {
+        self.account = account
+        self.credentials = credentials
+        self.transportFactory = transportFactory
+        self.options = options
+        self.logger = logger
+    }
 
     func makeIMAPClient() -> IMAPClient {
         let logger = self.logger
@@ -299,10 +345,10 @@ struct IMAPMailServiceConnector: Sendable {
 
     /// A connected, signed-in IMAP client (with `ID` sent when configured and supported).
     func openIMAP() async throws -> IMAPClient {
-        let client = makeIMAPClient()
+        var client = makeIMAPClient()
         do {
             try await client.connect()
-            try await authenticate(client)
+            client = try await signIn(client)
             if let fields = options.clientID, !fields.isEmpty {
                 // Some servers (NetEase, some hosting panels) insist on ID; others ignore it.
                 do {
@@ -314,7 +360,7 @@ struct IMAPMailServiceConnector: Sendable {
             return client
         } catch {
             await client.disconnect()
-            throw IMAPMailService.mailError(error)
+            throw advise(error, server: .imap)
         }
     }
 
@@ -327,18 +373,75 @@ struct IMAPMailServiceConnector: Sendable {
             return client
         } catch {
             await client.quit()
-            throw IMAPMailService.mailError(error)
+            throw advise(error, server: .smtp)
         }
     }
 
-    func authenticate(_ client: IMAPClient) async throws {
-        let username = Self.username(account.imap, account: account)
-        switch try await credential() {
+    /// Signs a connected `client` in and returns the signed-in client.
+    ///
+    /// iCloud accepts the name part of the address or the full address as the IMAP user name
+    /// (RESEARCH §2.2). Until one form has worked in this service, a refused form is retried once
+    /// with the other: on the same connection when the server kept it open, else on a fresh one
+    /// (then that one is returned and `client` is closed). The form that works is remembered for
+    /// every later connection. Other providers get exactly one attempt (Yahoo locks accounts
+    /// out after repeated failures; §3.7).
+    func signIn(_ client: IMAPClient) async throws -> IMAPClient {
+        let credential = try await credential()
+        let configured = Self.username(account.imap, account: account)
+        let first = usernames.confirmed ?? configured
+        do {
+            try await authenticate(client, username: first, credential: credential)
+            usernames.confirmed = first
+            return client
+        } catch {
+            let refusal = IMAPMailService.mailError(error)
+            guard case .authenticationFailed = refusal, usernames.confirmed == nil,
+                  let alternate = Providers.alternateIMAPUsername(for: account, refused: first) else { throw refusal }
+            logger?("Ink: iCloud refused that form of the user name; trying the other form once.")
+            // On the same connection while the server keeps it open.
+            if await client.state == .notAuthenticated {
+                do {
+                    try await authenticate(client, username: alternate, credential: credential)
+                    usernames.confirmed = alternate
+                    return client
+                } catch {
+                    let retryError = IMAPMailService.mailError(error)
+                    // Both forms refused: report the first refusal (the server's words for the configured name).
+                    if case .authenticationFailed = retryError { throw refusal }
+                    guard IMAPMailService.isConnectionLoss(retryError) else { throw retryError }
+                }
+            }
+            // The server hung up after the refusal: the other form on a new connection.
+            await client.disconnect()
+            let fresh = makeIMAPClient()
+            do {
+                try await fresh.connect()
+                try await authenticate(fresh, username: alternate, credential: credential)
+            } catch {
+                await fresh.disconnect()
+                let retryError = IMAPMailService.mailError(error)
+                if case .authenticationFailed = retryError { throw refusal }
+                throw retryError
+            }
+            usernames.confirmed = alternate
+            return fresh
+        }
+    }
+
+    private func authenticate(_ client: IMAPClient, username: String, credential: Credential) async throws {
+        switch credential {
         case .password(let password):
             try await client.login(username: username, password: password)
         case .oauth(let token):
             try await client.authenticateXOAUTH2(username: username, accessToken: token.accessToken)
         }
+    }
+
+    /// `error` as a `MailError`, with provider advice for refusals (`ProviderErrorAdvice`).
+    func advise(_ error: Error, server: ProviderErrorAdvice.Server) -> MailError {
+        let mapped = IMAPMailService.mailError(error)
+        let host = server == .imap ? account.imap.host : account.smtp.host
+        return ProviderErrorAdvice.advise(mapped, provider: account.provider, host: host, authMethod: account.authMethod, server: server)
     }
 
     func authenticate(_ client: SMTPClient) async throws {
@@ -364,6 +467,18 @@ struct IMAPMailServiceConnector: Sendable {
     private static func username(_ server: ServerConfig, account: AccountConfig) -> String {
         let trimmed = server.username.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? account.emailAddress : trimmed
+    }
+}
+
+/// The IMAP user name that signed in, shared between the service's connections.
+final class IMAPMailServiceUsernameMemory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+
+    /// The user name that last worked; nil until a sign-in succeeds.
+    var confirmed: String? {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
     }
 }
 

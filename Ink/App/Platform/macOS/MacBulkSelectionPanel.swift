@@ -14,7 +14,7 @@ struct MacBulkSelectionPanel: View {
         VStack(spacing: InkSpace.xl) {
             MacCardStack(conversations: conversations)
             VStack(spacing: InkSpace.xs) {
-                Text("\(conversations.count) conversations selected")
+                Text(selectionTitle)
                     .font(InkFont.title)
                     .tracking(InkTracking.title)
                     .foregroundStyle(Ink.primary)
@@ -52,7 +52,8 @@ struct MacBulkSelectionPanel: View {
     }
 
     private func commands(_ actions: MacActions) -> [MacCommand] {
-        var result: [MacCommand] = [.archive, .trash, .toggleRead, .toggleStar, .snooze, .spam]
+        var result: [MacCommand] = [.archive, .trash, .toggleRead, .toggleStar, .snooze]
+        if actions.isAvailable(.spam) { result.append(.spam) }
         if actions.isAvailable(.moveToInbox) { result.append(.moveToInbox) }
         return result
     }
@@ -62,7 +63,7 @@ struct MacBulkSelectionPanel: View {
         case .trash: return "Trash"
         case .snooze: return "Snooze"
         case .spam: return "Spam"
-        case .moveToInbox: return "Inbox"
+        case .moveToInbox: return app.store.scope.role == .junk ? "Not Spam" : "Inbox"
         case .toggleRead: return conversations.contains(where: \.isUnread) ? "Read" : "Unread"
         default: return actions.title(for: command)
         }
@@ -76,6 +77,10 @@ struct MacBulkSelectionPanel: View {
         case .toggleStar: return Ink.star
         default: return Ink.primary
         }
+    }
+
+    private var selectionTitle: String {
+        conversations.count == 1 ? "1 conversation selected" : "\(conversations.count) conversations selected"
     }
 
     /// "4 unread · 2 starred · 3 accounts".

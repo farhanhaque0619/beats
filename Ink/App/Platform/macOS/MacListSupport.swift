@@ -67,16 +67,18 @@ struct MacConversationMenu: View {
             } label: {
                 Label(MacCommand.trash.title, systemImage: MacCommand.trash.systemImage)
             }
-            Button {
-                actions.perform(.markSpam, on: conversations)
-            } label: {
-                Label(MacCommand.spam.title, systemImage: MacCommand.spam.systemImage)
+            if app.store.scope.role != .junk {
+                Button {
+                    actions.perform(.markSpam, on: conversations)
+                } label: {
+                    Label(MacCommand.spam.title, systemImage: MacCommand.spam.systemImage)
+                }
             }
             if app.store.scope.role != .inbox {
                 Button {
                     actions.moveToInbox(conversations)
                 } label: {
-                    Label(MacCommand.moveToInbox.title, systemImage: MacCommand.moveToInbox.systemImage)
+                    Label(actions.title(for: .moveToInbox), systemImage: MacCommand.moveToInbox.systemImage)
                 }
             }
             Divider()
@@ -211,6 +213,88 @@ extension View {
     /// Adds the configured trackpad swipe actions to a conversation row.
     func macSwipeActions(for conversation: Conversation, swipes: SwipeConfiguration, accent: Color, perform: @escaping (SwipeAction) -> Void) -> some View {
         modifier(MacSwipeActions(conversation: conversation, swipes: swipes, accent: accent, perform: perform))
+    }
+
+    /// Archive, Trash, Read/Unread and Snooze buttons on the hovered row, for a mouse that
+    /// can't swipe. See `MacRowHoverActions`.
+    func macHoverActions(for conversation: Conversation, perform: @escaping (SwipeAction) -> Void) -> some View {
+        modifier(MacRowHoverActions(conversation: conversation, perform: perform))
+    }
+}
+
+/// A small bar of triage buttons that fades in at the row's bottom-trailing corner while the
+/// pointer is over it. Hidden from VoiceOver: the same actions are in the context menu, the
+/// swipe actions and the keyboard.
+struct MacRowHoverActions: ViewModifier {
+    let conversation: Conversation
+    let perform: (SwipeAction) -> Void
+
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .bottomTrailing) {
+                if isHovering {
+                    MacHoverActionBar(isUnread: conversation.isUnread, perform: perform)
+                        .padding(.trailing, InkSpace.m)
+                        .padding(.bottom, InkSpace.s)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
+                }
+            }
+            .onHover { hovering in
+                withAnimation(InkMotion.fade) { isHovering = hovering }
+            }
+            // A row scrolled away under the pointer never hears it leave.
+            .onDisappear { isHovering = false }
+    }
+}
+
+private struct MacHoverActionBar: View {
+    let isUnread: Bool
+    let perform: (SwipeAction) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            button(.archive, systemImage: "archivebox", help: "Archive (E)")
+            button(.trash, systemImage: "trash", help: "Move to Trash (#)")
+            button(.toggleRead, systemImage: isUnread ? "envelope.open" : "envelope.badge",
+                   help: isUnread ? "Mark as Read (U)" : "Mark as Unread (U)")
+            button(.snooze, systemImage: "clock", help: "Snooze (H)")
+        }
+        .padding(.horizontal, 3)
+        .background(Ink.elevated, in: Capsule())
+        .overlay(Capsule().stroke(Ink.hairline, lineWidth: 0.5))
+        .accessibilityHidden(true)
+    }
+
+    private func button(_ action: SwipeAction, systemImage: String, help: String) -> some View {
+        MacHoverActionButton(systemImage: systemImage, tint: action.tint(accent: Ink.primary)) {
+            perform(action)
+        }
+        .help(help)
+    }
+}
+
+/// One icon in the hover bar; it takes the action's swipe colour under the pointer.
+private struct MacHoverActionButton: View {
+    let systemImage: String
+    let tint: Color
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isHovering ? tint : Ink.secondary)
+                .frame(width: 28, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        .onHover { hovering in
+            withAnimation(InkMotion.fade) { isHovering = hovering }
+        }
     }
 }
 #endif

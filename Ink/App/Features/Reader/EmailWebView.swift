@@ -143,8 +143,11 @@ final class EmailWebCoordinator: NSObject, WKNavigationDelegate {
             let document = await Task.detached(priority: .userInitiated) {
                 EmailDocumentBuilder.document(for: request)
             }.value
-            var blockList: WKContentRuleList?
-            if !key.allowsRemoteContent {
+            // Images on still keeps known trackers out; images off blocks every remote load.
+            let blockList: WKContentRuleList?
+            if key.allowsRemoteContent {
+                blockList = await ReaderContentRules.trackerBlockList()
+            } else {
                 blockList = await ReaderContentRules.remoteContentBlockList()
             }
             guard !Task.isCancelled, let self else { return }
@@ -162,8 +165,12 @@ final class EmailWebCoordinator: NSObject, WKNavigationDelegate {
         webView.loadHTMLString(document, baseURL: nil)
     }
 
+    /// Tallest page the reader will lay out. A runaway document (or a hostile one) can't make
+    /// the thread unboundedly tall; anything real is far shorter.
+    private static let maximumHeight: CGFloat = 60_000
+
     fileprivate func didMeasure(height: CGFloat) {
-        let rounded = ceil(height)
+        let rounded = min(ceil(height), Self.maximumHeight)
         guard rounded.isFinite, rounded > 0, abs(rounded - reportedHeight) >= 1 else { return }
         reportedHeight = rounded
         withAnimation(InkMotion.smooth) {
@@ -196,7 +203,8 @@ final class EmailWebCoordinator: NSObject, WKNavigationDelegate {
     }
 
     /// Only the document we load ourselves may navigate the view. Tapped links leave the app:
-    /// `mailto:` opens Compose, web links open in the browser, anything else is ignored.
+    /// `mailto:` opens Compose, web links open in the browser, phone numbers in Phone/FaceTime,
+    /// and anything else (`file:`, `javascript:`, app schemes) is ignored.
     private func policy(for action: WKNavigationAction) -> WKNavigationActionPolicy {
         guard let url = action.request.url else { return .cancel }
         let scheme = url.scheme?.lowercased() ?? ""
@@ -204,14 +212,17 @@ final class EmailWebCoordinator: NSObject, WKNavigationDelegate {
             switch scheme {
             case "mailto":
                 parent.onMailto(url)
-            case "http", "https":
+            case "http", "https", "tel", "sms":
                 openExternally(url)
             default:
                 break
             }
             return .cancel
         }
-        return scheme == "about" ? .allow : .cancel
+        // The document itself (loadHTMLString with no base URL is about:blank); never a
+        // redirect, a meta refresh, or a frame.
+        let isMainFrame = action.targetFrame?.isMainFrame ?? false
+        return scheme == "about" && isMainFrame ? .allow : .cancel
     }
 
     private func openExternally(_ url: URL) {

@@ -24,7 +24,7 @@ struct MacDetailColumn: View {
             .focusable(interactions: .edit)
             .focusEffectDisabled()
             .focused(focus, equals: .detail)
-            .macKeyboardShortcuts(app: app, handlesArrowKeys: true)
+            .macKeyboardShortcuts(app: app, pane: .detail)
             .toolbar { messageToolbar }
             .onChange(of: app.snoozeTargets.isEmpty) { _, isEmpty in
                 if isEmpty { isSnoozePopoverPresented = false }

@@ -13,10 +13,11 @@ struct ReaderActions {
     let willLeave: () -> Void
     /// Takes the screen away once the conversation has left. `wasFocused` is true when this is
     /// the thread the app navigated to (top of the iPhone stack, the Mac selection) and false
-    /// when it was pushed somewhere else, such as search results.
-    let leave: (_ wasFocused: Bool) -> Void
+    /// when it was pushed somewhere else, such as search results. `next` is the conversation
+    /// that sat below it in the list, worked out before it left.
+    let leave: (_ wasFocused: Bool, _ next: String?) -> Void
     /// Called right before the snooze picker opens for this conversation.
-    let willSnooze: (_ wasFocused: Bool) -> Void
+    let willSnooze: (_ wasFocused: Bool, _ next: String?) -> Void
 
     /// Whether this thread is the one `AppModel` navigation points at. On iPhone a thread opened
     /// from search lives in the search cover's own stack, never in `phonePath`.
@@ -26,6 +27,14 @@ struct ReaderActions {
         #else
         return app.selection.contains(conversation.id)
         #endif
+    }
+
+    /// The conversation below this one in the list. Read it before acting: the store drops the
+    /// conversation from the list straight away, after which there's nothing to be "after".
+    var nextInList: String? {
+        let list = store.conversations
+        guard let index = list.firstIndex(where: { $0.id == conversation.id }), index + 1 < list.count else { return nil }
+        return list[index + 1].id
     }
 
     var isFlagged: Bool { conversation.isFlagged }
@@ -62,7 +71,7 @@ struct ReaderActions {
 
     func snooze() {
         Haptics.tick()
-        willSnooze(isFocused)
+        willSnooze(isFocused, nextInList)
         app.perform(.snooze, on: [conversation])
     }
 
@@ -79,7 +88,7 @@ struct ReaderActions {
         if isFocused {
             app.phonePath.removeLast()
         } else {
-            leave(false)
+            leave(false, nil)
         }
         #endif
     }
@@ -109,16 +118,18 @@ struct ReaderActions {
 
     private func remove(_ action: SwipeAction) {
         let wasFocused = isFocused
+        let next = nextInList
         Haptics.success()
         willLeave()
         app.perform(action, on: [conversation])
-        leave(wasFocused)
+        leave(wasFocused, next)
     }
 
     /// Moves that go straight to the store rather than through a swipe action: leave the screen
     /// the same way, and on Mac select a neighbour so the detail column doesn't go blank.
     private func relocate(_ change: () -> Void) {
         let wasFocused = isFocused
+        let next = nextInList
         Haptics.success()
         willLeave()
         #if os(macOS)
@@ -132,7 +143,7 @@ struct ReaderActions {
         }
         #endif
         change()
-        leave(wasFocused)
+        leave(wasFocused, next)
     }
 
     private func path(for role: MailboxRole) -> String? {
@@ -275,11 +286,11 @@ struct ReaderToolbar: ToolbarContent {
             Button { actions.archive() } label: {
                 Label("Archive", systemImage: "archivebox")
             }
-            .help("Archive")
+            .help("Archive (E)")
             Button { actions.trash() } label: {
                 Label("Move to Trash", systemImage: "trash")
             }
-            .help("Move to Trash")
+            .help("Move to Trash (#)")
             ReaderMacSnoozeButton(conversation: actions.conversation)
             starButton
             Menu {
@@ -294,19 +305,22 @@ struct ReaderToolbar: ToolbarContent {
             } primaryAction: {
                 actions.reply(.reply)
             }
-            .help("Reply")
+            .help("Reply (R) · Reply All (A) · Forward (F)")
             moreMenu
         }
         #endif
     }
 
+    // Bar items stay in ink, not the accent (bars tint their items with it otherwise): the accent
+    // is for unread, Send and links. A star that's on is the star colour.
     private var starButton: some View {
         Button { actions.toggleStar() } label: {
             Label(actions.isFlagged ? "Unstar" : "Star", systemImage: actions.isFlagged ? "star.fill" : "star")
                 .foregroundStyle(actions.isFlagged ? Ink.star : Ink.primary)
         }
+        .tint(actions.isFlagged ? Ink.star : Ink.primary)
         .symbolEffect(.bounce, value: actions.isFlagged)
-        .help(actions.isFlagged ? "Unstar" : "Star")
+        .help(actions.isFlagged ? "Unstar (S)" : "Star (S)")
     }
 
     private var moreMenu: some View {
@@ -315,6 +329,7 @@ struct ReaderToolbar: ToolbarContent {
         } label: {
             Label("More", systemImage: "ellipsis.circle")
         }
+        .tint(Ink.primary)
         .help("More")
     }
 }
@@ -339,7 +354,7 @@ private struct ReaderMacSnoozeButton: View {
         } label: {
             Label("Snooze", systemImage: "clock")
         }
-        .help("Snooze")
+        .help("Snooze (H)")
         .popover(isPresented: $isPresented) {
             SnoozePicker(conversations: [conversation])
                 .environment(app)

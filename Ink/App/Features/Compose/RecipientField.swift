@@ -206,8 +206,11 @@ struct RecipientField: View {
             return
         }
         let typed = String(value.dropFirst()).replacingOccurrences(of: Self.sentinel, with: "")
-        if typed.rangeOfCharacter(from: Self.separators) != nil {
-            commitSeparated(typed)
+        // A separator inside quotes or angle brackets ("Doe, Jane" <jane@x.com>) is part of
+        // the address being typed, not the end of it.
+        if typed.rangeOfCharacter(from: Self.separators) != nil,
+           let separator = ComposeAddressParsing.lastSeparator(in: typed) {
+            commitSeparated(typed, at: separator)
             return
         }
         if typed.hasSuffix(" ") {
@@ -229,21 +232,27 @@ struct RecipientField: View {
     }
 
     /// Text containing a separator: everything before the last separator becomes tokens,
-    /// what follows stays in the field.
-    private func commitSeparated(_ typed: String) {
-        guard let last = typed.rangeOfCharacter(from: Self.separators, options: .backwards) else { return }
-        let head = String(typed[..<last.lowerBound])
-        let tail = String(typed[last.upperBound...]).trimmingCharacters(in: .whitespaces)
-        var found = ComposeAddressParsing.addresses(in: head)
-        if found.isEmpty, !head.trimmingCharacters(in: .whitespaces).isEmpty, let first = suggestions.first {
-            found = [first]
+    /// what follows stays in the field. A name with no address yet ("Ana,") takes the
+    /// highlighted or best suggestion.
+    private func commitSeparated(_ typed: String, at separator: Range<String.Index>) {
+        let head = String(typed[..<separator.lowerBound])
+        let tail = String(typed[separator.upperBound...]).trimmingCharacters(in: .whitespaces)
+        let parsed = ComposeAddressParsing.split(head)
+        var found = parsed.addresses
+        var leftovers = parsed.leftovers
+        if found.isEmpty, leftovers.count == 1, let suggestion = currentSuggestion {
+            found = [suggestion]
+            leftovers = []
         }
         if found.isEmpty {
+            // Nothing to turn into a token: drop the separator and keep the text.
             setTyped(head + tail)
-        } else {
-            add(found)
-            setTyped(tail)
+            return
         }
+        add(found)
+        // Pieces that aren't addresses stay in the field to be fixed, not thrown away. Joined
+        // with spaces: a separator here would be read as another one just typed.
+        setTyped((leftovers + [tail]).filter { !$0.isEmpty }.joined(separator: " "))
     }
 
     private func submit() {
@@ -256,25 +265,33 @@ struct RecipientField: View {
             add([suggestions[highlighted]])
             setTyped("")
         } else {
-            let found = ComposeAddressParsing.addresses(in: typed)
-            if !found.isEmpty {
-                add(found)
-                setTyped("")
+            let parsed = ComposeAddressParsing.split(typed)
+            if !parsed.addresses.isEmpty {
+                add(parsed.addresses)
+                setTyped(parsed.leftovers.joined(separator: " "))
             } else if let first = suggestions.first {
                 add([first])
                 setTyped("")
+            } else {
+                Haptics.warning()
             }
         }
         // Keep the keyboard up for the next recipient.
         focus.wrappedValue = field
     }
 
-    /// Leaving the field turns a complete address into a token; anything else stays as typed.
+    /// Leaving the field turns complete addresses into tokens; anything else stays as typed.
     private func commitTyped() {
-        let found = ComposeAddressParsing.addresses(in: pending)
-        guard !found.isEmpty else { return }
-        add(found)
-        setTyped("")
+        let parsed = ComposeAddressParsing.split(pending)
+        guard !parsed.addresses.isEmpty else { return }
+        add(parsed.addresses)
+        setTyped(parsed.leftovers.joined(separator: " "))
+    }
+
+    /// The suggestion Return or a comma would pick: the highlighted one, else the best match.
+    private var currentSuggestion: EmailAddress? {
+        if let highlighted, suggestions.indices.contains(highlighted) { return suggestions[highlighted] }
+        return suggestions.first
     }
 
     private func pick(_ address: EmailAddress) {
@@ -346,26 +363,107 @@ struct RecipientField: View {
     }
 }
 
-/// Turns typed or pasted text into addresses ("ana@x.com", "Ana <ana@x.com>, bob@y.com").
+/// Turns typed or pasted text into addresses ("ana@x.com", "Ana <ana@x.com>, bob@y.com",
+/// "\"Doe, Jane\" <jane@x.com>").
 enum ComposeAddressParsing {
     /// A zero-width space kept at the start of a recipient text field. SwiftUI reports no key
     /// event for backspace in an empty field, but deleting this character is an ordinary edit.
     static let sentinel = "\u{200B}"
 
+    private static let wrappers = CharacterSet(charactersIn: "<>\"'()")
+
     /// Valid addresses in `text`, de-duplicated, in order.
     static func addresses(in text: String) -> [EmailAddress] {
-        let cleaned = text
-            .replacingOccurrences(of: sentinel, with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return [] }
-        let parsed = AddressParser.parseList(cleaned).filter(\.isValid)
-        if !parsed.isEmpty { return parsed.uniqued() }
-        let wrappers = CharacterSet(charactersIn: "<>\"'()")
-        return cleaned
-            .split(whereSeparator: { ",; \n\t".contains($0) })
-            .map { EmailAddress(address: $0.trimmingCharacters(in: wrappers)) }
-            .filter(\.isValid)
-            .uniqued()
+        split(text).addresses
+    }
+
+    /// The addresses in `text`, plus the pieces that aren't addresses (so they can stay in the
+    /// field instead of silently disappearing).
+    static func split(_ text: String) -> (addresses: [EmailAddress], leftovers: [String]) {
+        let cleaned = text.replacingOccurrences(of: sentinel, with: "")
+        var addresses: [EmailAddress] = []
+        var leftovers: [String] = []
+        for segment in segments(of: cleaned) {
+            let trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let words = trimmed
+                .split(whereSeparator: \.isWhitespace)
+                .map { EmailAddress(address: $0.trimmingCharacters(in: wrappers)) }
+                .filter(\.isValid)
+            // "ana@x.com bob@y.com" is two people; the header parser would read the first as
+            // the second's name.
+            if words.count > 1, !trimmed.contains("<") {
+                addresses += words
+                continue
+            }
+            let parsed = AddressParser.parseList(trimmed).filter(\.isValid)
+            if !parsed.isEmpty {
+                addresses += parsed
+                continue
+            }
+            // An address wrapped in brackets or quotes. Words around an address are taken to
+            // be its name.
+            if words.isEmpty {
+                leftovers.append(trimmed)
+            } else {
+                addresses += words
+            }
+        }
+        return (addresses.uniqued(), leftovers)
+    }
+
+    /// `text` cut at every `,` `;` newline or tab that isn't inside quotes or angle brackets.
+    static func segments(of text: String) -> [Substring] {
+        var result: [Substring] = []
+        var start = text.startIndex
+        for separator in separators(in: text) {
+            result.append(text[start..<separator.lowerBound])
+            start = separator.upperBound
+        }
+        result.append(text[start...])
+        return result
+    }
+
+    /// The last separator outside quotes and angle brackets: where finished recipients end and
+    /// the one still being typed begins.
+    static func lastSeparator(in text: String) -> Range<String.Index>? {
+        separators(in: text).last
+    }
+
+    private static func separators(in text: String) -> [Range<String.Index>] {
+        var found: [Range<String.Index>] = []
+        var inQuotes = false
+        var escaped = false
+        var angleDepth = 0
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            let next = text.index(after: index)
+            if escaped {
+                escaped = false
+            } else if inQuotes {
+                if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inQuotes = false
+                }
+            } else {
+                switch character {
+                case "\"":
+                    inQuotes = true
+                case "<":
+                    angleDepth += 1
+                case ">":
+                    angleDepth = max(angleDepth - 1, 0)
+                case ",", ";", "\n", "\r", "\r\n", "\t":
+                    if angleDepth == 0 { found.append(index..<next) }
+                default:
+                    break
+                }
+            }
+            index = next
+        }
+        return found
     }
 }
 

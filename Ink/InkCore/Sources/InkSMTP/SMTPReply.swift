@@ -81,8 +81,8 @@ public struct SMTPReply: Sendable, Equatable, CustomStringConvertible {
         }
         var result = words.joined(separator: " ")
         if result.hasSuffix("]"), let open = result.range(of: " [", options: .backwards) {
-            let bracket = result[open.upperBound...].lowercased()
-            if bracket.contains("outlook.com") || bracket.contains(".prod.") || bracket.contains("protection.") {
+            let bracket = String(result[open.upperBound...])
+            if SMTPText.contains(bracket, "outlook.com") || SMTPText.contains(bracket, ".prod.") || SMTPText.contains(bracket, "protection.") {
                 result = String(result[..<open.lowerBound])
             }
         }
@@ -91,10 +91,34 @@ public struct SMTPReply: Sendable, Equatable, CustomStringConvertible {
 
     /// Gmail ids look like `d9443c01a7336-2e8f9d2a3cbsm1234567.31` or `a640c23a62f3a-ab1f3ed9e6bsm4.66`.
     private static func looksLikeTraceID(_ word: String) -> Bool {
-        guard word.count >= 12, !word.contains("/"), !word.contains("@") else { return false }
-        let hasDigit = word.contains(where: \.isNumber)
-        let allowed = word.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == ".") }
-        return hasDigit && allowed && word.contains("sm")
+        let bytes = Array(word.utf8)
+        guard bytes.count >= 12 else { return false }
+        let allowed = bytes.allSatisfy { byte in
+            (byte >= 0x30 && byte <= 0x39) || (byte | 0x20 >= 0x61 && byte | 0x20 <= 0x7A) || byte == UInt8(ascii: "-") || byte == UInt8(ascii: ".")
+        }
+        let hasDigit = bytes.contains { $0 >= 0x30 && $0 <= 0x39 }
+        return hasDigit && allowed && SMTPText.contains(word, "sm")
+    }
+}
+
+/// Text helpers for protocol strings that behave the same on every platform.
+enum SMTPText {
+    /// Whether `needle` occurs in `haystack`, compared byte for byte with ASCII letters folded to
+    /// lowercase. `String.contains(String)` resolves to a Character-level algorithm on Apple
+    /// platforms and to Foundation's search on Linux; reply text is checked with this instead.
+    static func contains(_ haystack: String, _ needle: String) -> Bool {
+        let source = Array(haystack.utf8).map(lower)
+        let target = Array(needle.utf8).map(lower)
+        guard !target.isEmpty else { return true }
+        guard source.count >= target.count else { return false }
+        for start in 0...(source.count - target.count) where source[start] == target[0] {
+            if source[start..<(start + target.count)].elementsEqual(target) { return true }
+        }
+        return false
+    }
+
+    private static func lower(_ byte: UInt8) -> UInt8 {
+        byte >= 0x41 && byte <= 0x5A ? byte + 0x20 : byte
     }
 }
 
@@ -143,7 +167,8 @@ struct SMTPReplyParser {
                 return nil
             }
             var end = newline
-            if end > readIndex, buffer[end - 1] == 0x0D { end -= 1 }
+            // CRLF, and the CR CR LF some servers send, both end the line.
+            while end > readIndex, buffer[end - 1] == 0x0D { end -= 1 }
             let line = buffer[readIndex..<end]
             readIndex = newline + 1
             if line.count > maxLineLength { throw ParseError.lineTooLong }

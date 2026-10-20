@@ -41,7 +41,7 @@ struct MailboxSwitcher: View {
             .padding(.bottom, InkSpace.xl)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .background(Ink.background)
+        .background(Ink.surface)
     }
 
     // MARK: Sections
@@ -234,6 +234,7 @@ struct MailboxSwitcher: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(MailboxSwitcherRowStyle())
+        .accessibilityLabel(title)
         .accessibilityValue(badge > 0 ? "\(badge) unread" : "")
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }

@@ -14,13 +14,35 @@ import AppKit
 extension Color {
     /// A colour that switches between light and dark appearance.
     init(light: Color, dark: Color) {
+        self.init(light: light, dark: dark, lightHighContrast: light, darkHighContrast: dark)
+    }
+
+    /// Same, with stronger variants for Settings › Accessibility › Increase Contrast.
+    /// The platform colours are made once here, not on every resolve while drawing.
+    init(light: Color, dark: Color, lightHighContrast: Color, darkHighContrast: Color) {
         #if canImport(UIKit)
+        let lightColor = UIColor(light)
+        let darkColor = UIColor(dark)
+        let lightHigh = UIColor(lightHighContrast)
+        let darkHigh = UIColor(darkHighContrast)
         self.init(uiColor: UIColor { traits in
-            traits.userInterfaceStyle == .dark ? UIColor(dark) : UIColor(light)
+            let high = traits.accessibilityContrast == .high
+            if traits.userInterfaceStyle == .dark { return high ? darkHigh : darkColor }
+            return high ? lightHigh : lightColor
         })
         #else
+        let lightColor = NSColor(light)
+        let darkColor = NSColor(dark)
+        let lightHigh = NSColor(lightHighContrast)
+        let darkHigh = NSColor(darkHighContrast)
         self.init(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .vibrantDark, .accessibilityHighContrastDarkAqua]) != nil ? NSColor(dark) : NSColor(light)
+            let match = appearance.bestMatch(from: [
+                .aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua,
+            ])
+            if match == .darkAqua { return darkColor }
+            if match == .accessibilityHighContrastDarkAqua { return darkHigh }
+            if match == .accessibilityHighContrastAqua { return lightHigh }
+            return lightColor
         })
         #endif
     }
@@ -44,15 +66,21 @@ enum Ink {
     /// Selected row background on Mac / pressed row on iPhone.
     static let selection = Color(light: Color(hex: 0x000000, opacity: 0.06), dark: Color(hex: 0xFFFFFF, opacity: 0.09))
 
-    // Text: one ink at three strengths.
+    // Text: one ink at three strengths. Secondary and tertiary darken under Increase Contrast.
     static let primary = Color(light: Color(hex: 0x0B0B0C), dark: Color(hex: 0xF4F4F5))
-    static let secondary = Color(light: Color(hex: 0x6C6C72), dark: Color(hex: 0x9C9CA3))
-    static let tertiary = Color(light: Color(hex: 0xA3A3A9), dark: Color(hex: 0x5E5E65))
+    /// Snippets, metadata: about 5:1 on white, 7.7:1 on black.
+    static let secondary = Color(light: Color(hex: 0x6C6C72), dark: Color(hex: 0x9C9CA3),
+                                 lightHighContrast: Color(hex: 0x4A4A50), darkHighContrast: Color(hex: 0xB8B8BF))
+    /// Section labels, counts, small glyphs. Kept above 3:1 so 11 pt labels stay legible.
+    static let tertiary = Color(light: Color(hex: 0x8E8E93), dark: Color(hex: 0x6A6A71),
+                                lightHighContrast: Color(hex: 0x6C6C72), darkHighContrast: Color(hex: 0x8E8E95))
 
     /// 1px separators.
-    static let hairline = Color(light: Color(hex: 0x000000, opacity: 0.08), dark: Color(hex: 0xFFFFFF, opacity: 0.10))
-    /// Pills, chips, text field backgrounds.
-    static let fill = Color(light: Color(hex: 0x000000, opacity: 0.045), dark: Color(hex: 0xFFFFFF, opacity: 0.075))
+    static let hairline = Color(light: Color(hex: 0x000000, opacity: 0.08), dark: Color(hex: 0xFFFFFF, opacity: 0.10),
+                                lightHighContrast: Color(hex: 0x000000, opacity: 0.22), darkHighContrast: Color(hex: 0xFFFFFF, opacity: 0.26))
+    /// Pills, chips, text field backgrounds. Dark needs a touch more than light to read on true black.
+    static let fill = Color(light: Color(hex: 0x000000, opacity: 0.05), dark: Color(hex: 0xFFFFFF, opacity: 0.10),
+                            lightHighContrast: Color(hex: 0x000000, opacity: 0.10), darkHighContrast: Color(hex: 0xFFFFFF, opacity: 0.18))
     /// Primary button: inverted ink.
     static let inverse = Color(light: Color(hex: 0x0B0B0C), dark: Color(hex: 0xF4F4F5))
     static let onInverse = Color(light: Color(hex: 0xFFFFFF), dark: Color(hex: 0x000000))
@@ -85,19 +113,35 @@ enum AccentTint: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Stable instances, so the `\.inkAccent` environment value compares equal between renders
+    /// and doesn't invalidate every view that reads it.
+    private static let electricColor = Color(light: Color(hex: 0x2F6BFF), dark: Color(hex: 0x4D84FF))
+    private static let emberColor = Color(light: Color(hex: 0xFF5A1F), dark: Color(hex: 0xFF5E2B))
+    private static let mintColor = Color(light: Color(hex: 0x00B383), dark: Color(hex: 0x1ED69F))
+    private static let irisColor = Color(light: Color(hex: 0x6E56F8), dark: Color(hex: 0x8B78FF))
+    private static let roseColor = Color(light: Color(hex: 0xF0386B), dark: Color(hex: 0xFF4F7E))
+    /// Near-black ink for labels on the bright accents (mint is under 3:1 with white).
+    private static let darkInk = Color(hex: 0x0B0B0C)
+
     var color: Color {
         switch self {
-        case .electric: return Color(light: Color(hex: 0x2F6BFF), dark: Color(hex: 0x4D84FF))
-        case .ember: return Color(light: Color(hex: 0xFF5A1F), dark: Color(hex: 0xFF6A33))
-        case .mint: return Color(light: Color(hex: 0x00B383), dark: Color(hex: 0x1ED69F))
-        case .iris: return Color(light: Color(hex: 0x6E56F8), dark: Color(hex: 0x8B78FF))
-        case .rose: return Color(light: Color(hex: 0xF0386B), dark: Color(hex: 0xFF4F7E))
+        case .electric: return Self.electricColor
+        case .ember: return Self.emberColor
+        case .mint: return Self.mintColor
+        case .iris: return Self.irisColor
+        case .rose: return Self.roseColor
         case .mono: return Ink.primary
         }
     }
 
-    /// Text/icon colour that reads on top of `color`.
-    var onColor: Color { self == .mono ? Ink.onInverse : .white }
+    /// Text/icon colour that reads on top of `color` (at least 3:1 for bold labels and glyphs).
+    var onColor: Color {
+        switch self {
+        case .mono: return Ink.onInverse
+        case .mint: return Self.darkInk
+        default: return .white
+        }
+    }
 }
 
 /// Per-account dot colours (stable by `AccountConfig.colorIndex`).
@@ -225,27 +269,65 @@ enum InkMotion {
     /// Toast in/out.
     static let toast = Animation.spring(response: 0.38, dampingFraction: 0.8)
     static let fade = Animation.easeOut(duration: 0.18)
+
+    /// `animation`, or a plain cross-fade when Reduce Motion is on (read
+    /// `@Environment(\.accessibilityReduceMotion)` and pass it in).
+    static func adaptive(_ animation: Animation, reduceMotion: Bool) -> Animation {
+        reduceMotion ? fade : animation
+    }
 }
 
 // MARK: - Haptics
 
 /// Haptic feedback from gesture code. Views can also use `.sensoryFeedback`.
+///
+/// The generators are kept and re-armed after each use, so the next tap lands without the
+/// Taptic Engine's wake-up delay (noticeable when a swipe crosses two thresholds quickly).
 @MainActor
 enum Haptics {
+    #if os(iOS)
+    private static let light = UIImpactFeedbackGenerator(style: .light)
+    private static let medium = UIImpactFeedbackGenerator(style: .medium)
+    private static let softImpact = UIImpactFeedbackGenerator(style: .soft)
+    private static let selection = UISelectionFeedbackGenerator()
+    private static let notification = UINotificationFeedbackGenerator()
+    #endif
+
+    /// Wakes the Taptic Engine ahead of an expected haptic (e.g. when a swipe begins).
+    static func prepare() {
+        #if os(iOS)
+        light.prepare()
+        medium.prepare()
+        softImpact.prepare()
+        #endif
+    }
+
     /// A swipe crossed a threshold.
     static func threshold() {
         #if os(iOS)
-        let generator = UIImpactFeedbackGenerator(style: .medium)
-        generator.impactOccurred(intensity: 0.85)
+        medium.impactOccurred(intensity: 0.85)
+        medium.prepare()
         #elseif os(macOS)
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        #endif
+    }
+
+    /// Tiered swipe feedback: a light tap arming the short action, a firmer one for the long
+    /// action. Use `tick()` when the finger backs off below the first threshold.
+    static func threshold(isLong: Bool) {
+        #if os(iOS)
+        let generator = isLong ? medium : light
+        generator.impactOccurred(intensity: isLong ? 1 : 0.8)
+        generator.prepare()
+        #else
+        threshold()
         #endif
     }
 
     /// Light tick for small changes (toggle, selection).
     static func tick() {
         #if os(iOS)
-        UISelectionFeedbackGenerator().selectionChanged()
+        selection.selectionChanged()
         #elseif os(macOS)
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
         #endif
@@ -254,7 +336,7 @@ enum Haptics {
     /// An action committed (archived, sent).
     static func success() {
         #if os(iOS)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        notification.notificationOccurred(.success)
         #elseif os(macOS)
         NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
         #endif
@@ -263,14 +345,14 @@ enum Haptics {
     /// Something destructive or failed.
     static func warning() {
         #if os(iOS)
-        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        notification.notificationOccurred(.warning)
         #endif
     }
 
     /// Soft thump for a row landing after a swipe.
     static func soft() {
         #if os(iOS)
-        UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.6)
+        softImpact.impactOccurred(intensity: 0.6)
         #endif
     }
 }

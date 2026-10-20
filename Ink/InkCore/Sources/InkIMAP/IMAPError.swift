@@ -71,7 +71,7 @@ public enum IMAPError: Error, Sendable, Equatable {
         var text = clean(response.text.text)
         if let alert {
             let cleanedAlert = clean(alert)
-            if !cleanedAlert.isEmpty, !text.contains(cleanedAlert) {
+            if !cleanedAlert.isEmpty, !IMAPText.contains(text, cleanedAlert) {
                 text = text.isEmpty ? cleanedAlert : "\(cleanedAlert) \(text)"
             }
         }

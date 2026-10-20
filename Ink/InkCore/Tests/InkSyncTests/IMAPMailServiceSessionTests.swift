@@ -183,16 +183,14 @@ final class IMAPMailServiceSessionTests: XCTestCase {
             .expect("* FETCH 1:3 \(T.summaryItemsPrefix)", reply:
                 summaryLine(1, 1, subject: "A") + summaryLine(2, 2, flags: "\\Seen", subject: "B") + summaryLine(3, 3, subject: "C") + T.ok("FETCH completed.")),
             .expect("* UID FETCH 1:3 (UID BODY.PEEK[1]<0.2048>)", reply:
-                // GreenMail's own (space-less) spelling garbles partial replies; whole parts are fetched instead.
-                "* 1 FETCH (UID 1 BODY[1]<0>\(F.literal("aaa")))\r\n* 2 FETCH (UID 2 BODY[1]<0>\(F.literal("bbb")))\r\n* 3 FETCH (UID 3 BODY[1]<0>\(F.literal("ccc")))\r\n" + T.ok("FETCH completed.")),
-            .expect("* UID FETCH 1:3 (UID BODY.PEEK[1])", reply:
-                "* 1 FETCH (UID 1 BODY[1] \(F.literal("Alpha text")))\r\n* 2 FETCH (UID 2 BODY[1] \(F.literal("Bravo text")))\r\n* 3 FETCH (UID 3 BODY[1] \(F.literal("Charlie text")))\r\n" + T.ok("FETCH completed.")),
+                // GreenMail's own spelling has no space before the literal (`BODY[1]<0>{10}`).
+                "* 1 FETCH (UID 1 BODY[1]<0>\(F.literal("Alpha text")))\r\n* 2 FETCH (UID 2 BODY[1]<0>\(F.literal("Bravo text")))\r\n* 3 FETCH (UID 3 BODY[1]<0>\(F.literal("Charlie text")))\r\n" + T.ok("FETCH completed.")),
             // Second sync: B unread again, C gone, D new, A marked \Deleted.
             T.greenMailSelect(exists: 3, uidNext: 5),
             .expect("* UID FETCH 1:* (UID FLAGS)", reply:
                 "* 1 FETCH (FLAGS (\\Deleted) UID 1)\r\n* 2 FETCH (FLAGS () UID 2)\r\n* 3 FETCH (FLAGS () UID 4)\r\n" + T.ok("FETCH completed.")),
             .expect("* UID FETCH 4 \(T.summaryItemsPrefix)", reply: summaryLine(3, 4, subject: "D") + T.ok("FETCH completed.")),
-            .expect("* UID FETCH 4 (UID BODY.PEEK[1])", reply: "* 3 FETCH (UID 4 BODY[1] \(F.literal("Delta text")))\r\n" + T.ok("FETCH completed.")),
+            .expect("* UID FETCH 4 (UID BODY.PEEK[1]<0.2048>)", reply: "* 3 FETCH (UID 4 BODY[1]<0>\(F.literal("Delta text")))\r\n" + T.ok("FETCH completed.")),
         ])
         let service = F.service(account, transports: IMAPServiceTransportQueue([script]))
         let first = try await service.sync(mailbox: inbox, previous: nil, limit: 10)
@@ -209,6 +207,28 @@ final class IMAPMailServiceSessionTests: XCTestCase {
         XCTAssertEqual(second.upserted.last?.subject, "B")
         XCTAssertEqual(second.state.knownUIDs, [2, 4])
         XCTAssertEqual(second.state.uidNext, 5)
+    }
+
+    func testUnusablePartialFetchRepliesFallBackToWholeParts() async throws {
+        // A server that answers partial fetches without the part data: snippets come from whole
+        // text parts from then on (cut down before decoding).
+        let script = ScriptedTransport(T.greenMailLogin() + [
+            T.greenMailSelect(exists: 2, uidNext: 3),
+            .expect("* FETCH 1:2 \(T.summaryItemsPrefix)", reply: summaryLine(1, 1, subject: "A") + summaryLine(2, 2, subject: "B") + T.ok()),
+            .expect("* UID FETCH 1:2 (UID BODY.PEEK[1]<0.2048>)", reply: "* 1 FETCH (UID 1)\r\n* 2 FETCH (UID 2)\r\n" + T.ok()),
+            .expect("* UID FETCH 1:2 (UID BODY.PEEK[1])", reply:
+                "* 1 FETCH (UID 1 BODY[1] \(F.literal("Alpha text")))\r\n* 2 FETCH (UID 2 BODY[1] \(F.literal("Bravo text")))\r\n" + T.ok()),
+            T.greenMailSelect(exists: 3, uidNext: 4),
+            .expect("* UID FETCH 1:* (UID FLAGS)", reply: "* 1 FETCH (FLAGS () UID 1)\r\n* 2 FETCH (FLAGS () UID 2)\r\n* 3 FETCH (FLAGS () UID 3)\r\n" + T.ok()),
+            .expect("* UID FETCH 3 \(T.summaryItemsPrefix)", reply: summaryLine(3, 3, subject: "C") + T.ok()),
+            .expect("* UID FETCH 3 (UID BODY.PEEK[1])", reply: "* 3 FETCH (UID 3 BODY[1] \(F.literal("Charlie text")))\r\n" + T.ok()),
+        ])
+        let service = F.service(F.account(host: "localhost"), transports: IMAPServiceTransportQueue([script]))
+        let mailbox = F.mailbox("INBOX", role: .inbox, accountID: "acct-other")
+        let first = try await service.sync(mailbox: mailbox, previous: nil, limit: 10)
+        XCTAssertEqual(first.upserted.map(\.snippet), ["Bravo text", "Alpha text"])
+        let second = try await service.sync(mailbox: mailbox, previous: first.state, limit: 10)
+        XCTAssertEqual(second.upserted.map(\.snippet), ["Charlie text"])
     }
 
     func testUIDValidityChangeResets() async throws {

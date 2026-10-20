@@ -7,14 +7,29 @@ struct AvatarView: View {
     var address: EmailAddress?
     var size: CGFloat = InkSize.avatar
 
+    /// `.increased` on a selected row in a focused Mac list: the avatar turns white-on-accent
+    /// with the rest of the row instead of a dark smudge on the highlight.
+    @Environment(\.backgroundProminence) private var prominence
+
+    /// Four quiet greys, made once. Dark mode sits a little higher so the circles still read on
+    /// true black.
+    private static let shades: [Color] = {
+        let steps: [(light: Double, dark: Double)] = [(0.07, 0.10), (0.10, 0.13), (0.13, 0.16), (0.16, 0.19)]
+        return steps.map { step in
+            Color(light: Color(hex: 0x0B0B0C, opacity: step.light), dark: Color(hex: 0xF4F4F5, opacity: step.dark))
+        }
+    }()
+
     var body: some View {
         let initials = address?.initials ?? "?"
+        let onHighlight = prominence == .increased
         Circle()
-            .fill(shade)
+            .fill(onHighlight ? Color.white.opacity(0.24) : shade)
             .overlay(
                 Text(initials)
                     .font(.system(size: size * 0.38, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Ink.primary.opacity(0.88))
+                    .foregroundStyle(onHighlight ? Color.white : Ink.primary.opacity(0.88))
+                    .lineLimit(1)
                     .minimumScaleFactor(0.6)
             )
             .frame(width: size, height: size)
@@ -23,8 +38,7 @@ struct AvatarView: View {
 
     private var shade: Color {
         let seed = (address?.normalized ?? "").unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }
-        let steps: [Double] = [0.07, 0.10, 0.13, 0.16]
-        return Ink.primary.opacity(steps[Int(seed % UInt32(steps.count))])
+        return Self.shades[Int(seed % UInt32(Self.shades.count))]
     }
 }
 
@@ -63,6 +77,7 @@ struct SectionHeaderView: View {
             .padding(.horizontal, InkSpace.gutter)
             .padding(.top, InkSpace.l)
             .padding(.bottom, InkSpace.xs)
+            .accessibilityLabel(title)
             .accessibilityAddTraits(.isHeader)
     }
 }
@@ -108,6 +123,7 @@ struct Chip: View {
         }
         .buttonStyle(.plain)
         .animation(InkMotion.snappy, value: isSelected)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -150,61 +166,97 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: InkSpace.m) {
             Image(systemName: systemImage)
-                .font(.system(size: 34, weight: .light))
+                .font(.system(size: 32, weight: .regular))
                 .foregroundStyle(Ink.tertiary)
-            Text(title).font(InkFont.headline).foregroundStyle(Ink.primary)
+                .padding(.bottom, InkSpace.xs)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(InkFont.headline)
+                .foregroundStyle(Ink.primary)
+                .multilineTextAlignment(.center)
             if let message {
                 Text(message)
                     .font(.subheadline)
                     .foregroundStyle(Ink.secondary)
                     .multilineTextAlignment(.center)
+                    .frame(maxWidth: 300)
             }
         }
         .padding(InkSpace.xxxl)
         .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 
-/// The reward for an empty inbox: a check that draws itself, then settles.
+/// The reward for an empty inbox: the accent ring draws itself, then the check pops in and the
+/// words rise. Reduce Motion gets a plain fade.
 struct InboxZeroView: View {
     @Environment(\.inkAccent) private var accent
-    @State private var drawn = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var ringDrawn = false
+    @State private var checkShown = false
+    @State private var textShown = false
+    private let title: String
+    private let message: String
+
+    /// Pass other words for a split inbox (e.g. "Focus is clear" / "3 waiting in Other") so an
+    /// empty filter isn't celebrated as a truly empty inbox.
+    init(title: String = "Inbox zero", message: String = "Nothing needs you right now.") {
+        self.title = title
+        self.message = message
+    }
 
     var body: some View {
         VStack(spacing: InkSpace.l) {
             ZStack {
                 Circle()
                     .stroke(Ink.hairline, lineWidth: 1.5)
-                    .frame(width: 84, height: 84)
                 Circle()
-                    .trim(from: 0, to: drawn ? 1 : 0)
+                    .trim(from: 0, to: ringDrawn ? 1 : 0)
                     .stroke(accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .frame(width: 84, height: 84)
                 Image(systemName: "checkmark")
                     .font(.system(size: 30, weight: .semibold))
                     .foregroundStyle(Ink.primary)
-                    .scaleEffect(drawn ? 1 : 0.4)
-                    .opacity(drawn ? 1 : 0)
+                    .scaleEffect(checkShown ? 1 : 0.4)
+                    .opacity(checkShown ? 1 : 0)
             }
+            .frame(width: 84, height: 84)
+            .accessibilityHidden(true)
             VStack(spacing: InkSpace.xs) {
-                Text("Inbox zero").font(InkFont.title).tracking(InkTracking.title).foregroundStyle(Ink.primary)
-                Text("Nothing needs you right now.").font(.subheadline).foregroundStyle(Ink.secondary)
+                Text(title).font(InkFont.title).tracking(InkTracking.title).foregroundStyle(Ink.primary)
+                Text(message).font(.subheadline).foregroundStyle(Ink.secondary)
             }
-            .opacity(drawn ? 1 : 0)
-            .offset(y: drawn ? 0 : 8)
+            .multilineTextAlignment(.center)
+            .opacity(textShown ? 1 : 0)
+            .offset(y: textShown ? 0 : 8)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 80)
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.7)) { drawn = true }
+        .onAppear(perform: play)
+        .onDisappear {
+            ringDrawn = false
+            checkShown = false
+            textShown = false
         }
-        .onDisappear { drawn = false }
         .accessibilityElement(children: .combine)
+    }
+
+    private func play() {
+        if reduceMotion {
+            ringDrawn = true
+            checkShown = true
+            withAnimation(InkMotion.fade) { textShown = true }
+            return
+        }
+        withAnimation(.easeOut(duration: 0.6)) { ringDrawn = true }
+        withAnimation(InkMotion.bouncy.delay(0.32)) { checkShown = true }
+        withAnimation(InkMotion.smooth.delay(0.42)) { textShown = true }
     }
 }
 
-/// Three pulsing dots for "working on it".
+/// Three pulsing dots for "working on it". The pulse is scoped to opacity, so the dots never
+/// inherit the repeating animation for their position when they appear inside a moving container.
 struct LoadingDots: View {
     @State private var phase = false
 
@@ -214,11 +266,14 @@ struct LoadingDots: View {
                 Circle()
                     .fill(Ink.secondary)
                     .frame(width: 6, height: 6)
-                    .opacity(phase ? 1 : 0.25)
-                    .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(index) * 0.18), value: phase)
+                    .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(index) * 0.18)) { dot in
+                        dot.opacity(phase ? 1 : 0.25)
+                    }
             }
         }
         .onAppear { phase = true }
+        .onDisappear { phase = false }
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading")
     }
 }
@@ -267,11 +322,19 @@ struct InkSecondaryButtonStyle: ButtonStyle {
 struct InkAccentButtonStyle: ButtonStyle {
     @Environment(\.inkAccent) private var accent
     @Environment(\.isEnabled) private var isEnabled
+    // Optional reads: the label colour follows the picked accent (dark ink on Mint, black on
+    // Mono in dark mode) wherever the settings are in the environment, white otherwise.
+    @Environment(AppSettings.self) private var settings: AppSettings?
+    @Environment(AppModel.self) private var app: AppModel?
+
+    private var labelColor: Color {
+        (settings ?? app?.settings)?.accent.onColor ?? .white
+    }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(InkFont.button)
-            .foregroundStyle(.white)
+            .foregroundStyle(labelColor)
             .padding(.horizontal, InkSpace.l)
             .padding(.vertical, 9)
             .background(accent, in: Capsule())

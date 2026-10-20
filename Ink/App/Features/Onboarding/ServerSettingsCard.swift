@@ -160,11 +160,17 @@ struct OnboardingServerSettingsCard: View {
                     .font(.footnote)
                     .foregroundStyle(Ink.secondary)
                 if !isExpanded {
-                    Text(imap.summary)
-                        .font(InkFont.mono)
-                        .foregroundStyle(Ink.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    // Both servers, visible before the password goes anywhere.
+                    VStack(alignment: .leading, spacing: InkSpace.xxs) {
+                        Text("In  " + imap.summary)
+                        Text("Out " + smtp.summary)
+                    }
+                    .font(InkFont.mono)
+                    .foregroundStyle(Ink.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Incoming \(imap.summary). Outgoing \(smtp.summary).")
                 }
             }
         case .notFound:

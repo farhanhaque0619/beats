@@ -16,6 +16,7 @@ enum InkDate {
         return f
     }()
     private static let readerFormatter: DateFormatter = make("EEE, MMM d · j:mm")
+    private static let weekdayTime: DateFormatter = make("EEE j:mm")
 
     private static func make(_ template: String) -> DateFormatter {
         let f = DateFormatter()
@@ -34,12 +35,32 @@ enum InkDate {
         return monthDayYear.string(from: date)
     }
 
-    /// Section header for grouping a list by day: "Today", "Yesterday", "This Week", "October", "March 2024".
+    /// When a snoozed conversation comes back, short enough for a row's trailing edge:
+    /// "6:00 PM" (today), "Wed 8:00 AM" (this coming week), "Oct 28", "Jan 5, 2027".
+    /// `listTimestamp` is for the past and would drop the time of tomorrow's snooze.
+    static func snoozeTimestamp(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        if calendar.isDate(date, inSameDayAs: now) { return time.string(from: date) }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
+        if days >= 1 && days < 7 { return weekdayTime.string(from: date) }
+        if days < 0 { return listTimestamp(date, now: now, calendar: calendar) }
+        if calendar.isDate(date, equalTo: now, toGranularity: .year) { return monthDay.string(from: date) }
+        return monthDayYear.string(from: date)
+    }
+
+    /// Section header for grouping a list by day: "Today", "Yesterday", "This Week", "Last Week",
+    /// "Earlier This Month", "October", "March 2024". Weeks follow the calendar, so on a Monday
+    /// last Thursday reads "Last Week", not "This Week". Each title covers an older span than the
+    /// one before, so newest-first lists never interleave them.
     static func sectionTitle(for date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
-        if calendar.isDate(date, inSameDayAs: now) { return "Today" }
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
+        // Mail dated in the future (a sender's clock running fast) belongs with today's.
+        if days <= 0 { return "Today" }
         if days == 1 { return "Yesterday" }
-        if days > 1 && days < 7 { return "This Week" }
+        if calendar.isDate(date, equalTo: now, toGranularity: .weekOfYear) { return "This Week" }
+        if let lastWeek = calendar.date(byAdding: .weekOfYear, value: -1, to: now),
+           calendar.isDate(date, equalTo: lastWeek, toGranularity: .weekOfYear) {
+            return "Last Week"
+        }
         if calendar.isDate(date, equalTo: now, toGranularity: .month) { return "Earlier This Month" }
         if calendar.isDate(date, equalTo: now, toGranularity: .year) { return month.string(from: date) }
         return monthYear.string(from: date)

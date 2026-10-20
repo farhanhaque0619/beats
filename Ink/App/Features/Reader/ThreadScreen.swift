@@ -21,16 +21,26 @@ private struct ReaderThreadView: View {
     @Environment(MailStore.self) private var store
     @Environment(AppSettings.self) private var settings
     @Environment(\.dismiss) private var dismiss
+    #if os(macOS)
+    @Environment(\.controlActiveState) private var controlActiveState
+    #else
+    @Environment(\.scenePhase) private var scenePhase
+    #endif
 
     /// The conversation as it was when an action took it out of the store, drawn while the
     /// screen goes away instead of flashing an empty state.
     @State private var departing: Conversation?
     @State private var awaitingSnooze = false
     @State private var snoozeWasFocused = false
+    @State private var snoozeNext: String?
     @State private var expandedIDs: Set<String> = []
     @State private var didSeedExpansion = false
     @State private var revealsAllEarlier = false
     @State private var showsInlineTitle = false
+    /// The thread has been on screen long enough to count as read (see `settle()`).
+    @State private var hasSettled = false
+    /// Unread mail arrived while nobody was looking; mark it read when they're back.
+    @State private var readIsPending = false
 
     var body: some View {
         let live = store.conversation(id: conversationID)
@@ -43,10 +53,14 @@ private struct ReaderThreadView: View {
         }
         .background(Ink.background.ignoresSafeArea())
         .onAppear {
-            if let live { opened(live) }
+            if let live { seedExpansionIfNeeded(live) }
         }
+        .task { await settle() }
         .onChange(of: live?.latest?.id) { _, _ in
             if let current = store.conversation(id: conversationID) { messageArrived(in: current) }
+        }
+        .onChange(of: isAttending) { _, attending in
+            if attending && readIsPending { markReadIfAttending() }
         }
         .onChange(of: app.isSnoozePickerPresented) { wasPresented, isPresented in
             if wasPresented && !isPresented { snoozePickerClosed() }
@@ -162,12 +176,16 @@ private struct ReaderThreadView: View {
         return result
     }
 
-    /// The newest message and anything unread start open.
+    /// The newest message and the latest few unread ones start open. Every open message is a
+    /// web view, so a long unread thread (a mailing list, a busy group) doesn't build dozens of
+    /// them at once; older unread messages stay one tap away, in bold.
     private static func defaultExpanded(_ conversation: Conversation) -> Set<String> {
-        var ids = Set(conversation.messages.filter(\.isUnread).map(\.id))
+        var ids = Set(conversation.messages.filter(\.isUnread).suffix(maxOpenUnread).map(\.id))
         if let latest = conversation.latest { ids.insert(latest.id) }
         return ids
     }
+
+    private static let maxOpenUnread = 3
 
     private func seedExpansionIfNeeded(_ conversation: Conversation) {
         guard !didSeedExpansion else { return }
@@ -189,36 +207,67 @@ private struct ReaderThreadView: View {
 
     // MARK: Lifecycle
 
-    private func opened(_ conversation: Conversation) {
+    /// How long a thread is on screen before it counts as read. Long enough for the iPhone push
+    /// to finish (so the inbox doesn't re-render under the zoom at 120 Hz) and for j/k on the
+    /// Mac to skim past conversations without reading them all; short enough to feel immediate.
+    private static let readDelay: Duration = .milliseconds(450)
+
+    private func settle() async {
+        try? await Task.sleep(for: Self.readDelay)
+        guard !Task.isCancelled else { return }
+        hasSettled = true
+        markReadIfAttending()
+    }
+
+    /// The app is in front (iPhone) or its window is (Mac): new mail landing in an open thread
+    /// only counts as read if someone can see it.
+    private var isAttending: Bool {
+        #if os(macOS)
+        return controlActiveState != .inactive
+        #else
+        return scenePhase == .active
+        #endif
+    }
+
+    private func markReadIfAttending() {
+        guard settings.markReadOnOpen,
+              let conversation = store.conversation(id: conversationID),
+              conversation.isUnread else {
+            readIsPending = false
+            return
+        }
         // Remember what was unread before marking it read, so those messages stay open.
         seedExpansionIfNeeded(conversation)
-        if settings.markReadOnOpen, conversation.isUnread {
+        if hasSettled && isAttending {
+            readIsPending = false
             store.markOpened(conversation)
+        } else {
+            readIsPending = true
         }
     }
 
     /// A new message landed while the thread is open (or the thread just finished loading).
     private func messageArrived(in conversation: Conversation) {
         guard didSeedExpansion else {
-            opened(conversation)
+            seedExpansionIfNeeded(conversation)
+            markReadIfAttending()
             return
         }
         if let latest = conversation.latest, !expandedIDs.contains(latest.id) {
             withAnimation(InkMotion.smooth) { _ = expandedIDs.insert(latest.id) }
         }
-        if settings.markReadOnOpen, conversation.isUnread {
-            store.markOpened(conversation)
-        }
+        markReadIfAttending()
     }
 
     private func snoozePickerClosed() {
         guard awaitingSnooze else { return }
         awaitingSnooze = false
         if let snapshot = departing, store.snoozeDate(for: snapshot) != nil {
-            leave(snapshot.id, wasFocused: snoozeWasFocused)
+            leave(snapshot.id, wasFocused: snoozeWasFocused, next: snoozeNext)
         } else {
             departing = nil
         }
+        snoozeNext = nil
     }
 
     private func makeActions(for conversation: Conversation) -> ReaderActions {
@@ -227,23 +276,32 @@ private struct ReaderThreadView: View {
             app: app,
             store: store,
             willLeave: { departing = conversation },
-            leave: { wasFocused in leave(conversation.id, wasFocused: wasFocused) },
-            willSnooze: { wasFocused in
+            leave: { wasFocused, next in leave(conversation.id, wasFocused: wasFocused, next: next) },
+            willSnooze: { wasFocused, next in
                 departing = conversation
                 awaitingSnooze = true
                 snoozeWasFocused = wasFocused
+                snoozeNext = next
             }
         )
     }
 
     /// Back to the list (or on to the next conversation, per settings) when this is the thread
-    /// the app navigated to; otherwise pop whichever stack pushed it (search results).
-    private func leave(_ conversationID: String, wasFocused: Bool) {
-        if wasFocused {
-            app.didRemoveFocusedConversation(conversationID)
-        } else {
+    /// the app navigated to; otherwise pop whichever stack pushed it (search results). On Mac
+    /// the selection has already moved to a neighbour by the time this runs.
+    private func leave(_ conversationID: String, wasFocused: Bool, next: String?) {
+        guard wasFocused else {
             dismiss()
+            return
         }
+        #if os(iOS)
+        guard let top = app.phonePath.indices.last, app.phonePath[top] == conversationID else { return }
+        if settings.advanceToNext, let next, store.conversation(id: next) != nil {
+            app.phonePath[top] = next
+        } else {
+            app.phonePath.removeLast()
+        }
+        #endif
     }
 }
 

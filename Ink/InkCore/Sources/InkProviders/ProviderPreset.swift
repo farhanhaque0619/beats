@@ -37,7 +37,10 @@ public struct ProviderPreset: Identifiable, Sendable {
     public var smtp: (host: String, port: Int, security: ConnectionSecurity)
     /// Sign-in options, preferred first.
     public var authOptions: [ProviderAuthOption]
-    /// The server files mail sent over SMTP into Sent itself, so the client must not APPEND a copy.
+    /// The server files mail sent over SMTP into Sent itself, so the client must not APPEND a copy
+    /// (Gmail, Outlook.com/Exchange, Yahoo, AOL, Zoho; RESEARCH §3.8). When false, the mail service
+    /// looks for the server's copy by Message-ID for a few seconds and uploads its own only when
+    /// none turns up.
     public var savesSentAutomatically: Bool
     /// Where "Archive" moves mail: `.all` for Gmail (remove the Inbox label), `.archive` elsewhere.
     public var archiveRole: MailboxRole
@@ -94,6 +97,11 @@ public struct ProviderPreset: Identifiable, Sendable {
 
     /// The server settings for `email`. Usually the preset's hosts; Zoho accounts in the EU,
     /// India, Australia, Japan or Canada data centres get that region's hosts.
+    ///
+    /// The user name is the full address, except for iCloud's IMAP server, which takes the name
+    /// part of an @icloud.com / @me.com / @mac.com address (Apple's settings page; RESEARCH §2.2).
+    /// SMTP always takes the full address. `Providers.alternateIMAPUsername(for:refused:)` gives
+    /// the other form to try when the server refuses this one.
     public func servers(forEmail email: String) -> (imap: ServerConfig, smtp: ServerConfig) {
         let username = email.trimmingCharacters(in: .whitespacesAndNewlines)
         var imapHost = imap.host
@@ -103,13 +111,22 @@ public struct ProviderPreset: Identifiable, Sendable {
             smtpHost = "smtp.\(region.hostSuffix)"
         }
         return (
-            ServerConfig(host: imapHost, port: imap.port, security: imap.security, username: username),
+            ServerConfig(host: imapHost, port: imap.port, security: imap.security, username: imapUsername(forEmail: username)),
             ServerConfig(host: smtpHost, port: smtp.port, security: smtp.security, username: username)
         )
     }
 
-    /// A ready-to-save account for `email` on this provider. The user name is the full address.
-    /// With `.oauth2` the account records this provider's OAuth provider.
+    /// The IMAP user name to try first for `email`: the name part for iCloud's own address
+    /// domains, the full address everywhere else (including custom domains hosted by iCloud,
+    /// whose name part means nothing to Apple).
+    public func imapUsername(forEmail email: String) -> String {
+        let address = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard id == .icloud, handles(email: address), let local = Providers.localPart(of: address) else { return address }
+        return local
+    }
+
+    /// A ready-to-save account for `email` on this provider, with the user names from
+    /// `servers(forEmail:)`. With `.oauth2` the account records this provider's OAuth provider.
     public func accountConfig(email: String, displayName: String, authMethod: AuthMethod) -> AccountConfig {
         let address = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let servers = servers(forEmail: address)
@@ -177,7 +194,15 @@ enum ZohoRegion: String, CaseIterable {
     }
 }
 
-/// The built-in provider presets.
+/// The built-in provider presets (RESEARCH §2.2).
+///
+/// Not here on purpose:
+/// - **Proton Mail** works only through Proton Mail Bridge on a Mac: IMAP `127.0.0.1:1143` and SMTP
+///   `127.0.0.1:1025`, STARTTLS with Bridge's own self-signed certificate. Ink's transport accepts
+///   only certificates the system trusts, so Bridge would need certificate pinning (trust the one
+///   certificate Bridge exports, for 127.0.0.1 only). That is out of scope for v1, so Proton gets no
+///   preset and no sign-in guide. Nothing would work on iPhone anyway (§2.2, §2.7).
+/// - **GMX / web.de** have no preset yet; autodiscovery finds them through Thunderbird's ISPDB.
 public enum Providers {
     // Every literal below is a well-formed URL.
     private static func url(_ string: String) -> URL? { URL(string: string) }
@@ -209,8 +234,9 @@ public enum Providers {
         usernameHint: "Your full Gmail address"
     )
 
-    // savesSentAutomatically: iCloud's SMTP submission server is not known to file a copy in
-    // "Sent Messages" (Apple Mail always APPENDs one itself), so Ink saves the copy.
+    // savesSentAutomatically: iCloud is not known to file a copy in "Sent Messages" (unverified,
+    // RESEARCH §3.8), so the service checks for one and uploads its own when there's none.
+    // IMAP user name: the name part of the address, the full address as the fallback (§2.2).
     public static let icloud = ProviderPreset(
         id: .icloud,
         name: "iCloud Mail",
@@ -228,11 +254,11 @@ public enum Providers {
         ],
         savesSentAutomatically: false,
         notes: [
-            "Use your full iCloud address (name@icloud.com) as the user name, even if you send from a custom domain.",
+            "Sign in with your primary iCloud Mail address (name@icloud.com, @me.com or @mac.com), even if you send from an alias or a custom domain.",
             "Your Apple Account password won't work here: iCloud Mail needs an app-specific password.",
             "Changing your Apple Account password revokes app-specific passwords; make a new one if Ink stops signing in.",
         ],
-        usernameHint: "Your full iCloud address"
+        usernameHint: "Your primary iCloud Mail address"
     )
 
     public static let outlook = ProviderPreset(
@@ -276,9 +302,10 @@ public enum Providers {
                 "Copy the password and paste it here.",
             ]),
         ],
-        savesSentAutomatically: false,
+        savesSentAutomatically: true,
         notes: [
             "Your normal Yahoo password won't work here: Yahoo needs an app password for mail apps.",
+            "Yahoo keeps a copy of everything you send in Sent by itself.",
         ]
     )
 
@@ -297,12 +324,14 @@ public enum Providers {
                 "Copy the password and paste it here.",
             ]),
         ],
-        savesSentAutomatically: false,
+        savesSentAutomatically: true,
         notes: [
             "Your normal AOL password won't work here: AOL needs an app password for mail apps.",
+            "AOL keeps a copy of everything you send in Sent by itself.",
         ]
     )
 
+    // savesSentAutomatically: Fastmail doesn't file sent mail by default (RESEARCH §3.8).
     public static let fastmail = ProviderPreset(
         id: .fastmail,
         name: "Fastmail",
@@ -348,7 +377,7 @@ public enum Providers {
             ]),
             .password,
         ],
-        savesSentAutomatically: false,
+        savesSentAutomatically: true,
         notes: [
             "Turn on IMAP first: in Zoho Mail open Settings → Mail Accounts → IMAP and enable IMAP Access.",
             "With two-factor authentication on, Zoho needs an app-specific password; without it your normal password works.",
@@ -404,6 +433,38 @@ public enum Providers {
         }
         if ZohoRegion.forMXHost(host) != nil { return zoho }
         return nil
+    }
+
+    /// The other IMAP user name form to try once when iCloud refuses `refused`: the full address
+    /// after the name part, or the name part after the full address (Apple: "if your email client
+    /// can't connect using just the name part, try the full address"; RESEARCH §2.2). Nil for
+    /// other providers, OAuth accounts, and when there's no other form.
+    public static func alternateIMAPUsername(for account: AccountConfig, refused: String) -> String? {
+        guard account.authMethod == .password, isICloud(account) else { return nil }
+        let address = account.emailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tried = refused.trimmingCharacters(in: .whitespacesAndNewlines)
+        let alternate: String?
+        if tried.contains("@") {
+            alternate = localPart(of: tried)
+        } else {
+            alternate = address.contains("@") ? address : nil
+        }
+        guard let alternate, !alternate.isEmpty, alternate.lowercased() != tried.lowercased() else { return nil }
+        return alternate
+    }
+
+    /// True for accounts on iCloud Mail's servers (by preset or by IMAP host).
+    static func isICloud(_ account: AccountConfig) -> Bool {
+        if account.provider == .icloud { return true }
+        let host = normalizeHost(account.imap.host)
+        return host == "mail.me.com" || host.hasSuffix(".mail.me.com")
+    }
+
+    /// The part of an address before the last `@`, or nil when there isn't one.
+    static func localPart(of email: String) -> String? {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let at = trimmed.lastIndex(of: "@"), at != trimmed.startIndex else { return nil }
+        return String(trimmed[..<at])
     }
 
     /// Lowercased domain of an address (after the last `@`), or nil when there isn't one.

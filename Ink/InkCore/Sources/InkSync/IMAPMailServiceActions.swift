@@ -381,6 +381,10 @@ extension IMAPMailService {
                 }
                 let info = try await self.ensureSelected(target.rawPath, client: client)
                 let uids = try await client.uidSearch(criteria)
+                if let messageLimit = Self.messageLimit(await client.capabilities), uids.count >= messageLimit {
+                    // Yahoo answers at most MESSAGELIMIT matches, with a plain OK (RESEARCH §3.4).
+                    self.log("The search may be incomplete: the server returns at most \(messageLimit) matches.")
+                }
                 let chosen = Array(uids.suffix(limit))
                 guard !chosen.isEmpty else { return [] }
                 let summaries = try await self.fetchSummaries(uids: chosen, path: target.path, uidValidity: info.uidValidity, client: client)
@@ -412,9 +416,17 @@ extension IMAPMailService {
 
     // MARK: - Send
 
-    /// Builds the message, sends it over SMTP (password or XOAUTH2), then files a copy in Sent
-    /// (`\Seen`, with a Bcc header so you can see who you blind-copied) unless the server does
-    /// that itself (`savesSentAutomatically`, or Gmail's own SMTP).
+    /// Builds the message, sends it over SMTP (password or XOAUTH2), then makes sure Sent has a
+    /// copy (RESEARCH §3.8):
+    ///
+    /// - Accounts whose server files the copy itself (`savesSentAutomatically`: Gmail, Outlook,
+    ///   Yahoo, AOL, Zoho) get nothing more, and neither does Gmail's own SMTP whatever the
+    ///   account says (a Gmail APPEND only wastes upload).
+    /// - Everyone else (iCloud, Fastmail, any other server): Ink looks for the server's copy in
+    ///   Sent by Message-ID at `Options.sentCopyPollDelays` (0, 1, 1, 2 s), and uploads its own,
+    ///   `\Seen` and with a Bcc header so you can see who you blind-copied, only when none turns
+    ///   up. Once this session has seen the server file a copy it waits longer
+    ///   (`Options.sentCopyPatientPollDelays`), since such copies can arrive late.
     ///
     /// Once the server has accepted the message nothing more is thrown: a failure to file the
     /// Sent copy is logged, because reporting it would invite sending the message again.
@@ -430,27 +442,94 @@ extension IMAPMailService {
             if let summary = result.rejectionSummary { log(summary) }
         } catch {
             await smtp.quit()
-            throw Self.mailError(error)
+            throw connector.advise(error, server: .smtp)
         }
         await smtp.quit()
 
-        guard !account.savesSentAutomatically else { return }
+        // A server Ink knows nothing about is checked even if the account claims it files copies.
+        guard !account.savesSentAutomatically || account.provider == .other else { return }
         let copy = Self.sentCopy(built.data, bcc: message.bcc)
         do {
-            try await exclusive {
-                try await self.withClient { client in
-                    if await client.isGmail, Self.isGoogleSMTP(self.account.smtp.host) { return }
-                    let sent = try await self.mailbox(role: .sent, creatingAs: "Sent", client: client)
-                    _ = try await client.append(to: sent.rawPath, message: copy, flags: ["\\Seen"], date: Date())
-                    if var memo = self.memos[sent.path] {
-                        memo.exists = nil
-                        self.memos[sent.path] = memo
-                    }
-                }
-            }
+            try await fileSentCopy(copy, messageID: built.messageID)
         } catch {
             log("Sent, but couldn't file a copy in Sent: \(Self.mailError(error).localizedDescription)")
         }
+    }
+
+    /// What a look in Sent found.
+    enum SentCopyLookup: Equatable {
+        /// Gmail's SMTP files the copy; nothing to do.
+        case serverFiles
+        /// The server's copy is there.
+        case found
+        case notFound
+        /// The account has no Sent folder yet (the upload creates one).
+        case noSentFolder
+    }
+
+    /// Looks for the server's copy of a just-sent message, then uploads Ink's own if there's none.
+    func fileSentCopy(_ copy: Data, messageID: String) async throws {
+        let delays: [TimeInterval]
+        switch serverSavesSentCopies {
+        case true?: delays = options.sentCopyPatientPollDelays
+        case false?: delays = Array(options.sentCopyPollDelays.prefix(1))
+        case nil: delays = options.sentCopyPollDelays
+        }
+        poll: for delay in delays {
+            if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            let lookup = try await exclusive {
+                try await self.withClient { client in try await self.lookForSentCopy(messageID: messageID, client: client) }
+            }
+            switch lookup {
+            case .serverFiles:
+                return
+            case .found:
+                if serverSavesSentCopies != true { log("The server filed its own copy in Sent; not uploading one.") }
+                serverSavesSentCopies = true
+                return
+            case .noSentFolder:
+                break poll
+            case .notFound:
+                continue
+            }
+        }
+        if !delays.isEmpty, serverSavesSentCopies == nil { serverSavesSentCopies = false }
+        try await exclusive {
+            try await self.withClient { client in
+                let isGmail = await client.isGmail
+                if isGmail, Self.isGoogleSMTP(self.account.smtp.host) { return }
+                let sent: MailboxInfo
+                if isGmail {
+                    // Never invent a "Sent" label on Gmail; its Sent Mail may just be hidden from IMAP.
+                    guard let found = try await self.mailbox(role: .sent, client: client) else {
+                        self.log("Gmail's Sent Mail isn't shown in IMAP; not filing a copy.")
+                        return
+                    }
+                    sent = found
+                } else {
+                    sent = try await self.mailbox(role: .sent, creatingAs: "Sent", client: client)
+                }
+                _ = try await client.append(to: sent.rawPath, message: copy, flags: ["\\Seen"], date: Date())
+                if var memo = self.memos[sent.path] {
+                    memo.exists = nil
+                    self.memos[sent.path] = memo
+                }
+            }
+        }
+    }
+
+    /// One look for the message in Sent, by Message-ID.
+    private func lookForSentCopy(messageID: String, client: IMAPClient) async throws -> SentCopyLookup {
+        if await client.isGmail, Self.isGoogleSMTP(account.smtp.host) { return .serverFiles }
+        guard let sent = try await mailbox(role: .sent, client: client) else { return .noSentFolder }
+        let id = messageID.trimmingCharacters(in: CharacterSet(charactersIn: "<> \t"))
+        guard !id.isEmpty else { return .notFound }
+        let wasSelected = await client.selectedMailbox?.mailbox == sent.rawPath
+        _ = try await ensureSelected(sent.rawPath, client: client)
+        // A mailbox selected earlier hears about new messages only in reply to a command.
+        if wasSelected { _ = try await client.noop() }
+        let found = try await client.uidSearch(.and([.header("Message-ID", id), .undeleted]))
+        return found.isEmpty ? .notFound : .found
     }
 
     static func isGoogleSMTP(_ host: String) -> Bool {

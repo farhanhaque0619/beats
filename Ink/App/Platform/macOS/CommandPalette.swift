@@ -89,6 +89,9 @@ struct CommandPalette: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    Color.clear
+                        .frame(height: 0)
+                        .id(Self.topID)
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         if index == 0 || items[index - 1].group != item.group {
                             Text(item.group.title)
@@ -123,8 +126,14 @@ struct CommandPalette: View {
                 guard items.indices.contains(index) else { return }
                 proxy.scrollTo(items[index].id)
             }
+            .onChange(of: items) { _, _ in
+                // New results start from the top, where the highlight is.
+                proxy.scrollTo(Self.topID, anchor: .top)
+            }
         }
     }
+
+    private static let topID = "palette-top"
 
     private var footer: some View {
         HStack(spacing: InkSpace.m) {
@@ -194,7 +203,10 @@ struct CommandPalette: View {
             .filter { actions.isAvailable($0) }
             .map { command in
                 MacPaletteItem(id: "command:\(command.rawValue)", group: .commands, action: .command(command),
-                            title: actions.title(for: command), systemImage: actions.systemImage(for: command),
+                            title: actions.title(for: command),
+                            // "Undo" says what it undoes ("Archived 3 conversations").
+                            subtitle: command == .undo ? store.toast?.message : nil,
+                            systemImage: actions.systemImage(for: command),
                             hint: command.paletteHint, keywords: command.keywords)
             }
         commands.append(MacPaletteItem(id: "settings", group: .commands, action: .settings, title: "Settings…",

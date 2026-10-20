@@ -2,20 +2,23 @@
 import SwiftUI
 import InkCore
 
-/// Gmail-style single-key shortcuts for the focused list or reader: j/k move, e archives,
-/// # or ⌫ trashes, r/a/f reply, c composes, / searches, s stars, u toggles read, h snoozes,
-/// ! marks spam, Esc clears the selection.
+/// Gmail-style single-key shortcuts for the focused pane: j/k move, e archives, # or ⌫ trashes,
+/// r/a/f reply, c composes, / searches, s stars, u toggles read, h snoozes, ! marks spam,
+/// z undoes, Esc clears the selection.
 ///
 /// Uses `.onKeyPress`, so keys only arrive while this pane (or something inside it) has focus,
 /// and they step aside while a text field is being edited, a sheet is up or the palette is open.
 /// Keys with ⌘, ⌃ or ⌥ are left to the menu bar.
 struct MacKeyboardShortcuts: ViewModifier {
     let app: AppModel
-    /// Conversation IDs in display order, for j/k (search results); nil means the mailbox list.
-    var order: [String]?
-    /// The reader moves between conversations with ↑/↓ too; the list leaves arrows to `List`,
-    /// which already moves (and extends) the selection with them.
-    var handlesArrowKeys: Bool
+    /// Which pane this is. The reader also moves between conversations with ↑/↓; the list and
+    /// the sidebar leave arrows to their `List` (which moves, and extends, its own selection),
+    /// and the sidebar leaves ⌫ alone so it never trashes mail by surprise.
+    var pane: MacPane
+    /// Called after j/k moved the selection, so the sidebar can hand the keyboard to the list.
+    var didNavigate: (() -> Void)?
+    /// Esc with nothing selected (search results use it to end the search).
+    var escapeWithoutSelection: (() -> Void)?
 
     func body(content: Content) -> some View {
         content.onKeyPress(phases: [.down, .repeat]) { press in
@@ -32,17 +35,26 @@ struct MacKeyboardShortcuts: ViewModifier {
         guard let command = command(for: press) else { return .ignored }
         if press.phase == .repeat && !command.repeats { return .handled }
         guard actions.isAvailable(command) else {
+            if command == .clearSelection, let escapeWithoutSelection {
+                escapeWithoutSelection()
+                return .handled
+            }
             // Let Esc and ⌫ fall through to the system; swallow letters so nothing beeps.
             return isLetterShortcut(press) ? .handled : .ignored
         }
-        actions.run(command, order: order)
+        actions.run(command)
+        if command == .nextConversation || command == .previousConversation {
+            didNavigate?()
+        }
         return .handled
     }
 
     private func command(for press: KeyPress) -> MacCommand? {
         if press.key == .escape { return .clearSelection }
-        if press.key == .delete || press.key == .deleteForward { return .trash }
-        if handlesArrowKeys {
+        if press.key == .delete || press.key == .deleteForward {
+            return pane == .sidebar ? nil : .trash
+        }
+        if pane == .detail {
             if press.key == .downArrow { return .nextConversation }
             if press.key == .upArrow { return .previousConversation }
         }
@@ -60,6 +72,7 @@ struct MacKeyboardShortcuts: ViewModifier {
         case "u": return .toggleRead
         case "h": return .snooze
         case "!": return .spam
+        case "z": return .undo
         default: return nil
         }
     }
@@ -71,13 +84,15 @@ struct MacKeyboardShortcuts: ViewModifier {
 
     private func isLetterShortcut(_ press: KeyPress) -> Bool {
         press.key != .escape && press.key != .delete && press.key != .deleteForward
+            && press.key != .upArrow && press.key != .downArrow
     }
 }
 
 extension View {
     /// Single-key mail shortcuts for a focusable pane. See `MacKeyboardShortcuts`.
-    func macKeyboardShortcuts(app: AppModel, order: [String]? = nil, handlesArrowKeys: Bool) -> some View {
-        modifier(MacKeyboardShortcuts(app: app, order: order, handlesArrowKeys: handlesArrowKeys))
+    func macKeyboardShortcuts(app: AppModel, pane: MacPane, didNavigate: (() -> Void)? = nil,
+                              escapeWithoutSelection: (() -> Void)? = nil) -> some View {
+        modifier(MacKeyboardShortcuts(app: app, pane: pane, didNavigate: didNavigate, escapeWithoutSelection: escapeWithoutSelection))
     }
 }
 #endif

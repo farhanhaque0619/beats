@@ -210,6 +210,9 @@ private struct SnoozeTile: View {
                     .font(.system(size: 19, weight: .medium))
                     .foregroundStyle(isFilled ? onFill : Ink.primary)
                     .symbolEffect(.bounce, value: isFilled)
+                    // Symbols differ in height (sunrise, sofa); a fixed box keeps every tile
+                    // in a row the same height.
+                    .frame(width: 26, height: 24, alignment: .leading)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(InkFont.headline)

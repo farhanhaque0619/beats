@@ -100,11 +100,17 @@ struct ReaderMessageBody: View {
                 collapseQuotes: collapseQuotes,
                 readingFont: settings.readingFont,
                 contentHeight: $contentHeight,
-                onMailto: { app.handleOpenURL($0) }
+                onMailto: { url in
+                    // Written from the account this message came to, not whichever inbox is open.
+                    if let draft = ReaderMailto.draft(for: url, accountID: message.accountID, store: store) {
+                        Haptics.tick()
+                        app.composeDraft = draft
+                    }
+                }
             )
             // Held at 1 pt until the page has been measured, then springs open to its height.
             .frame(height: isReady ? max(contentHeight, 1) : 1)
-            .padding(.horizontal, inspection?.isDesigned == true ? InkSpace.s : InkSpace.gutter)
+            .padding(.horizontal, horizontalInset)
             .opacity(isReady ? 1 : 0)
             .accessibilityHidden(!isReady)
 
@@ -121,6 +127,16 @@ struct ReaderMessageBody: View {
             ReaderAttachmentStrip(message: message, attachments: attachments)
         }
     }
+
+    /// Designed newsletters get nearly the full width. Simple mail brings its own 16 px of
+    /// padding (EmailHTMLDocument), so the view is inset just enough for the text to line up
+    /// with the sender's avatar and the subject above it.
+    private var horizontalInset: CGFloat {
+        if inspection?.isDesigned == true { return InkSpace.s }
+        return max(InkSpace.gutter - Self.documentPadding, 0)
+    }
+
+    private static let documentPadding: CGFloat = 16
 
     // MARK: Privacy
 
@@ -213,10 +229,14 @@ private struct ReaderPrivacyBanner: View {
             }
             .buttonStyle(.pressable)
             .fixedSize()
+            // Ink has no image proxy, so be straight about what loading them gives away.
+            .accessibilityHint("The sender can see your IP address and when you opened this. Known trackers stay blocked.")
+            .help("Images come straight from the sender: they can see your IP address and when you opened this. Known trackers stay blocked.")
         }
         .padding(.horizontal, InkSpace.m)
         .padding(.vertical, InkSpace.s)
         .background(Ink.fill, in: RoundedRectangle(cornerRadius: InkRadius.medium, style: .continuous))
+        .accessibilityElement(children: .contain)
     }
 
     private var text: String {

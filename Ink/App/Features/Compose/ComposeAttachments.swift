@@ -7,13 +7,30 @@ import PhotosUI
 import UIKit
 #endif
 
+/// What became of one picked file or photo.
+enum ComposeAttachmentLoad: Sendable {
+    case attached(OutgoingAttachment)
+    /// Bigger than any provider accepts, so it was never read into memory.
+    case tooLarge(name: String, bytes: Int)
+    case failed
+
+    var attachment: OutgoingAttachment? {
+        if case .attached(let attachment) = self { return attachment }
+        return nil
+    }
+}
+
 /// Turns picked files and photos into `OutgoingAttachment`s, reading and converting off the
 /// main thread.
 enum ComposeAttachmentLoader {
-    /// Reads files from the file importer or a drop. Files that can't be read are skipped.
-    static func attachments(from urls: [URL]) async -> [OutgoingAttachment] {
+    /// No provider takes a single file this big (Gmail and iCloud stop at 25 MB a message, and
+    /// attachments grow by about a third when encoded), so it isn't read at all.
+    static let maxFileBytes = 25 * 1024 * 1024
+
+    /// Reads files from the file importer or a drop.
+    static func attachments(from urls: [URL]) async -> [ComposeAttachmentLoad] {
         await Task.detached(priority: .userInitiated) {
-            urls.compactMap { ComposeAttachmentLoader.readFile($0) }
+            urls.map { ComposeAttachmentLoader.readFile($0) }
         }.value
     }
 
@@ -64,33 +81,53 @@ enum ComposeAttachmentLoader {
         return Image(decorative: box.image, scale: 1)
     }
 
-    private static func readFile(_ url: URL) -> OutgoingAttachment? {
+    private static func readFile(_ url: URL) -> ComposeAttachmentLoad {
         // Files from the importer live outside the sandbox until we ask for access.
         let scoped = url.startAccessingSecurityScopedResource()
         defer {
             if scoped { url.stopAccessingSecurityScopedResource() }
         }
-        guard let data = try? Data(contentsOf: url) else { return nil }
         let filename = url.lastPathComponent
-        return OutgoingAttachment(filename: filename, mimeType: mimeType(forFilename: filename), data: data)
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > maxFileBytes {
+            return .tooLarge(name: filename, bytes: size)
+        }
+        guard let data = try? Data(contentsOf: url) else { return .failed }
+        guard data.count <= maxFileBytes else { return .tooLarge(name: filename, bytes: data.count) }
+        return .attached(OutgoingAttachment(filename: filename, mimeType: mimeType(forFilename: filename), data: data))
     }
 
     #if os(iOS)
     /// Loads a photo or video from the library. HEIC and other Apple-only image formats become
-    /// JPEG so every recipient can open them.
-    static func attachment(from item: PhotosPickerItem, number: Int) async -> OutgoingAttachment? {
-        guard let data = try? await item.loadTransferable(type: Data.self) else { return nil }
+    /// JPEG so every recipient can open them. Videos are measured before they're read, so a long
+    /// clip can't flood memory.
+    static func attachment(from item: PhotosPickerItem, number: Int) async -> ComposeAttachmentLoad {
         let types = item.supportedContentTypes
         let type = types.first(where: { $0.conforms(to: .image) || $0.conforms(to: .movie) }) ?? types.first
         let isImage = type?.conforms(to: .image) ?? false
         let baseName = isImage ? "Photo \(number)" : "Video \(number)"
+        let pathExtension = type?.preferredFilenameExtension ?? (isImage ? "jpg" : "mov")
+
+        var loaded: Data?
+        if !isImage, type?.conforms(to: .movie) ?? false,
+           let picked = try? await item.loadTransferable(type: ComposePickedMovie.self) {
+            guard let movie = picked.data else {
+                return .tooLarge(name: "\(baseName).\(pathExtension)", bytes: picked.size)
+            }
+            loaded = movie
+        }
+        if loaded == nil {
+            loaded = try? await item.loadTransferable(type: Data.self)
+        }
+        guard let data = loaded else { return .failed }
+
         if isImage, let type, !(type.conforms(to: .jpeg) || type.conforms(to: .png) || type.conforms(to: .gif)),
            let jpeg = await jpegData(from: data) {
-            return OutgoingAttachment(filename: "\(baseName).jpg", mimeType: "image/jpeg", data: jpeg)
+            guard jpeg.count <= maxFileBytes else { return .tooLarge(name: "\(baseName).jpg", bytes: jpeg.count) }
+            return .attached(OutgoingAttachment(filename: "\(baseName).jpg", mimeType: "image/jpeg", data: jpeg))
         }
-        let pathExtension = type?.preferredFilenameExtension ?? (isImage ? "jpg" : "mov")
+        guard data.count <= maxFileBytes else { return .tooLarge(name: "\(baseName).\(pathExtension)", bytes: data.count) }
         let mime = type?.preferredMIMEType ?? mimeType(forFilename: "\(baseName).\(pathExtension)")
-        return OutgoingAttachment(filename: "\(baseName).\(pathExtension)", mimeType: mime, data: data)
+        return .attached(OutgoingAttachment(filename: "\(baseName).\(pathExtension)", mimeType: mime, data: data))
     }
 
     private static func jpegData(from data: Data) async -> Data? {
@@ -100,6 +137,27 @@ enum ComposeAttachmentLoader {
     }
     #endif
 }
+
+#if os(iOS)
+/// A video from the photo library, handed over as a file so its size is known before anything
+/// is read. `data` is nil when it's too big to email.
+private struct ComposePickedMovie: Transferable {
+    let size: Int
+    let data: Data?
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .movie) { received in
+            let url = received.file
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            guard size <= ComposeAttachmentLoader.maxFileBytes else {
+                return Self(size: size, data: nil)
+            }
+            let data = try Data(contentsOf: url)
+            return Self(size: data.count, data: data)
+        }
+    }
+}
+#endif
 
 /// Carries a decoded thumbnail from the decoding task back to the main actor. CGImage is
 /// immutable, so handing it across is safe.
@@ -115,8 +173,11 @@ struct ComposeAttachmentStrip: View {
     private let note: String?
     private let onRemove: (OutgoingAttachment) -> Void
 
-    /// Most providers refuse messages over 25 MB.
+    /// Most providers refuse messages over 25 MB (Outlook.com nearer 20 MB), counted after
+    /// encoding.
     private static let sizeLimit = 25 * 1024 * 1024
+    /// Base64 turns 3 bytes into 4 and adds a line break every 76 characters.
+    private static let encodingGrowth = 4.0 / 3.0 * 78.0 / 76.0
 
     init(attachments: [OutgoingAttachment], isLoading: Bool, note: String?, onRemove: @escaping (OutgoingAttachment) -> Void) {
         self.attachments = attachments
@@ -164,8 +225,9 @@ struct ComposeAttachmentStrip: View {
     private var footnote: (text: String, isWarning: Bool)? {
         if let note { return (note, true) }
         let total = totalSize
-        if total > Self.sizeLimit {
-            return ("\(InkFormat.fileSize(total)) in total, more than the 25 MB most providers accept", true)
+        let encoded = Int(Double(total) * Self.encodingGrowth)
+        if encoded > Self.sizeLimit {
+            return ("About \(InkFormat.fileSize(encoded)) once sent, more than the 25 MB most providers accept", true)
         }
         if attachments.count > 1 {
             return ("\(attachments.count) attachments · \(InkFormat.fileSize(total))", false)

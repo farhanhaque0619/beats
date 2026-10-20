@@ -9,6 +9,7 @@ import InkCore
 /// other in from its side.
 struct InboxScreen: View {
     @Environment(MailStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let zoomNamespace: Namespace.ID?
     @State private var isHeaderCollapsed = false
@@ -36,9 +37,11 @@ struct InboxScreen: View {
                             .id(Self.topAnchor)
                         InboxSyncBanner()
                         ZStack(alignment: .top) {
+                            // A new mailbox gets a fresh list (no row-by-row reshuffle of the old
+                            // one); Focus and Other slide past each other.
                             InboxList(zoomNamespace: zoomNamespace)
-                                .id(page)
-                                .transition(page.transition)
+                                .id(InboxListIdentity(scope: store.scope, page: page))
+                                .transition(reduceMotion ? .opacity : page.transition)
                         }
                     }
                     .frame(maxWidth: Self.readableWidth)
@@ -54,6 +57,15 @@ struct InboxScreen: View {
                     withAnimation(InkMotion.snappy) { isHeaderCollapsed = collapsed }
                 }
 
+                // Fills the status bar area so the big title slides under it, not under the
+                // clock, before the compact bar takes over.
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 0)
+                    .background(Ink.background)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+
                 if isHeaderCollapsed {
                     InboxCompactBar {
                         Haptics.tick()
@@ -62,10 +74,20 @@ struct InboxScreen: View {
                     .transition(.opacity.combined(with: .offset(y: -8)))
                 }
             }
+            .onChange(of: store.scope) {
+                // A different mailbox starts at the top, not wherever the last one was scrolled to.
+                proxy.scrollTo(Self.topAnchor, anchor: .top)
+            }
         }
         .background(Ink.background)
         .toolbar(.hidden, for: .navigationBar)
     }
+}
+
+/// Identity of the list under the header.
+private struct InboxListIdentity: Hashable {
+    let scope: MailScope
+    let page: InboxPage
 }
 
 /// Which list the inbox shows. Focus sits to the left of Other, so each slides in from its own

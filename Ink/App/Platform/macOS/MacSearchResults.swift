@@ -8,6 +8,8 @@ struct MacSearchResults: View {
     let query: String
     let submitCount: Int
     var focus: FocusState<MacPane?>.Binding
+    /// Clears the search field and goes back to the mailbox (Esc with nothing selected).
+    var endSearch: () -> Void
 
     @Environment(AppModel.self) private var app
     @Environment(MailStore.self) private var store
@@ -18,6 +20,8 @@ struct MacSearchResults: View {
     @State private var remote: [Conversation] = []
     @State private var remoteState: RemoteState = .idle
     @State private var hasSearchedLocally = false
+    /// Results that have since left (archived, trashed, moved) and are no longer shown.
+    @State private var hiddenIDs: Set<String> = []
     @State private var lastServerQuery: String?
     /// The submit count already acted on, so a fresh results view doesn't treat an old Return
     /// as a new one.
@@ -32,42 +36,66 @@ struct MacSearchResults: View {
         @Bindable var app = app
         let context = MacRowContext(store: store, settings: settings)
         let actions = MacActions(app: app)
-        let order = (local + remote).map(\.id)
+        let shownLocal = local.filter { !hiddenIDs.contains($0.id) }
+        let shownRemote = remote.filter { !hiddenIDs.contains($0.id) }
+        let order = (shownLocal + shownRemote).map(\.id)
+        let isEmpty = hasSearchedLocally && order.isEmpty && remoteState == .done
         VStack(spacing: 0) {
-            header
-            List(selection: $app.selection) {
-                if !local.isEmpty {
-                    Section {
-                        ForEach(local) { conversation in
-                            resultRow(conversation, context: context, actions: actions)
+            header(count: order.count)
+            ScrollViewReader { proxy in
+                List(selection: $app.selection) {
+                    if !shownLocal.isEmpty {
+                        Section {
+                            ForEach(shownLocal) { conversation in
+                                resultRow(conversation, context: context, actions: actions)
+                            }
+                        } header: {
+                            sectionTitle("In your mail")
                         }
-                    } header: {
-                        sectionTitle("In your mail")
+                    }
+                    if showsRemoteSection(shownRemote: shownRemote, shownLocal: shownLocal) {
+                        Section {
+                            ForEach(shownRemote) { conversation in
+                                resultRow(conversation, context: context, actions: actions)
+                            }
+                            remoteStatus(hasLocal: !shownLocal.isEmpty, hasRemote: !shownRemote.isEmpty)
+                        } header: {
+                            sectionTitle("More results")
+                        }
                     }
                 }
-                Section {
-                    ForEach(remote) { conversation in
-                        resultRow(conversation, context: context, actions: actions)
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .contextMenu(forSelectionType: String.self) { ids in
+                    MacConversationMenu(app: app, ids: ids)
+                }
+                .focused(focus, equals: .list)
+                .macKeyboardShortcuts(app: app, pane: .list, escapeWithoutSelection: endSearch)
+                .overlay {
+                    if isEmpty {
+                        EmptyStateView(systemImage: "magnifyingglass", title: "No results", message: "Nothing matches “\(query)”.")
+                            .transition(.opacity)
                     }
-                    remoteStatus
-                } header: {
-                    sectionTitle("More results")
+                }
+                .animation(InkMotion.smooth, value: isEmpty)
+                .onChange(of: app.focusedConversationID) { _, id in
+                    // j/k from the list or the reader: keep the selected result in view.
+                    guard let id, order.contains(id) else { return }
+                    withAnimation(InkMotion.snappy) { proxy.scrollTo(id) }
                 }
             }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
-            .contextMenu(forSelectionType: String.self) { ids in
-                MacConversationMenu(app: app, ids: ids)
-            }
-            .focused(focus, equals: .list)
-            .macKeyboardShortcuts(app: app, order: order, handlesArrowKeys: false)
-            .overlay {
-                if isEmpty {
-                    EmptyStateView(systemImage: "magnifyingglass", title: "No results", message: "Nothing matches “\(query)”.")
-                        .transition(.opacity)
-                }
-            }
-            .animation(InkMotion.smooth, value: isEmpty)
+        }
+        .onChange(of: order, initial: true) { _, newOrder in
+            MacVisibleList.searchOrder = newOrder
+        }
+        .onDisappear {
+            MacVisibleList.searchOrder = nil
+        }
+        .onChange(of: store.toast?.id) { _, _ in
+            updateHiddenResults()
+        }
+        .onChange(of: store.lastSyncedAt) { _, _ in
+            updateHiddenResults()
         }
         .task(id: query) {
             await searchAsYouType()
@@ -83,9 +111,8 @@ struct MacSearchResults: View {
         }
     }
 
-    private var header: some View {
-        let count = local.count + remote.count
-        return HStack(alignment: .firstTextBaseline, spacing: InkSpace.s) {
+    private func header(count: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: InkSpace.s) {
             Text("Search")
                 .font(InkFont.title)
                 .tracking(InkTracking.title)
@@ -105,12 +132,17 @@ struct MacSearchResults: View {
         .animation(InkMotion.snappy, value: count)
     }
 
-    private func resultRow(_ conversation: Conversation, context: MacRowContext, actions: MacActions) -> some View {
-        context.row(conversation)
+    /// A result drawn from the store's current copy, so starring or reading it shows at once.
+    private func resultRow(_ snapshot: Conversation, context: MacRowContext, actions: MacActions) -> some View {
+        let conversation = store.conversation(id: snapshot.id) ?? snapshot
+        return context.row(conversation)
             .equatable()
             .listRowInsets(EdgeInsets())
             .listRowSeparatorTint(Ink.hairline)
             .macSwipeActions(for: conversation, swipes: settings.swipes, accent: accent) { action in
+                actions.perform(action, on: [conversation])
+            }
+            .macHoverActions(for: conversation) { action in
                 actions.perform(action, on: [conversation])
             }
     }
@@ -123,8 +155,17 @@ struct MacSearchResults: View {
             .foregroundStyle(Ink.tertiary)
     }
 
+    /// "More results" appears once there's something to say there.
+    private func showsRemoteSection(shownRemote: [Conversation], shownLocal: [Conversation]) -> Bool {
+        switch remoteState {
+        case .idle: return !shownRemote.isEmpty
+        case .loading, .failed: return true
+        case .done: return !shownRemote.isEmpty || !shownLocal.isEmpty
+        }
+    }
+
     @ViewBuilder
-    private var remoteStatus: some View {
+    private func remoteStatus(hasLocal: Bool, hasRemote: Bool) -> some View {
         switch remoteState {
         case .loading:
             HStack {
@@ -155,7 +196,7 @@ struct MacSearchResults: View {
             .listRowSeparator(.hidden)
             .selectionDisabled()
         case .done:
-            if remote.isEmpty && !local.isEmpty {
+            if !hasRemote && hasLocal {
                 Text("Nothing else on the server.")
                     .font(.subheadline)
                     .foregroundStyle(Ink.tertiary)
@@ -169,8 +210,32 @@ struct MacSearchResults: View {
         }
     }
 
-    private var isEmpty: Bool {
-        hasSearchedLocally && local.isEmpty && remote.isEmpty && remoteState == .done
+    /// Hides results that have left since the search ran: moved out locally (archive, trash,
+    /// spam, another folder: the store no longer has them) or now sitting in Trash or Spam.
+    /// Undo brings them back, since the store has them again.
+    private func updateHiddenResults() {
+        let listed = Dictionary(store.conversations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var filedAway: [String: Set<String>] = [:]
+        var hidden: Set<String> = []
+        for snapshot in local + remote {
+            guard let conversation = listed[snapshot.id] ?? store.conversation(id: snapshot.id) else {
+                hidden.insert(snapshot.id)
+                continue
+            }
+            let accountID = conversation.accountID
+            let paths: Set<String>
+            if let known = filedAway[accountID] {
+                paths = known
+            } else {
+                paths = Set(store.mailboxes(for: accountID).filter { $0.role == .trash || $0.role == .junk }.map(\.path))
+                filedAway[accountID] = paths
+            }
+            if !paths.isEmpty, !conversation.messages.isEmpty, conversation.messages.allSatisfy({ paths.contains($0.mailboxPath) }) {
+                hidden.insert(snapshot.id)
+            }
+        }
+        guard hidden != hiddenIDs else { return }
+        withAnimation(InkMotion.rowRemoval) { hiddenIDs = hidden }
     }
 
     private func searchAsYouType() async {
@@ -182,6 +247,7 @@ struct MacSearchResults: View {
             remote = []
             remoteState = .idle
             hasSearchedLocally = true
+            hiddenIDs = []
         }
         lastServerQuery = nil
         try? await Task.sleep(nanoseconds: 230_000_000)

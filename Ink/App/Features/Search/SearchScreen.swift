@@ -120,7 +120,8 @@ struct SearchScreen: View {
                     .keyboardShortcut(.cancelAction)
             }
         }
-        .padding(.horizontal, InkSpace.l)
+        // Same edges as the chips and results below.
+        .padding(.horizontal, InkSpace.gutter)
         .padding(.top, InkSpace.s)
         .padding(.bottom, InkSpace.xs)
     }
@@ -150,9 +151,20 @@ struct SearchScreen: View {
             )
             .padding(.top, InkSpace.xxl)
         } else {
-            SectionHeaderView("Recent")
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                SectionHeaderView("Recent")
+                Button("Clear", action: clearRecents)
+                    .font(InkFont.caption)
+                    .foregroundStyle(Ink.secondary)
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, InkSpace.gutter)
+                    .padding(.vertical, InkSpace.s)
+                    .contentShape(Rectangle())
+                    .accessibilityLabel("Clear recent searches")
+            }
             ForEach(recents, id: \.self) { recent in
                 recentRow(recent)
+                    .transition(.opacity)
             }
         }
     }
@@ -401,6 +413,11 @@ struct SearchScreen: View {
         Haptics.tick()
         query = recent
         submit()
+    }
+
+    private func clearRecents() {
+        Haptics.tick()
+        withAnimation(InkMotion.snappy) { store.clearRecentSearches() }
     }
 
     private func open(_ conversation: Conversation) {

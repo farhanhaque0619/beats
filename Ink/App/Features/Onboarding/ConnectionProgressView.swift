@@ -105,6 +105,8 @@ struct OnboardingSuccessView: View {
     @State private var popped = false
     @State private var drawn = false
     @State private var pulsed = false
+    /// Done and the automatic close can both fire; only the first one counts.
+    @State private var finished = false
 
     var body: some View {
         VStack(spacing: InkSpace.xl) {
@@ -142,7 +144,7 @@ struct OnboardingSuccessView: View {
 
             Spacer(minLength: 0)
 
-            Button("Done", action: onDone)
+            Button("Done", action: finish)
                 .buttonStyle(.inkPrimary)
                 .keyboardShortcut(.defaultAction)
                 .opacity(drawn ? 1 : 0)
@@ -166,6 +168,12 @@ struct OnboardingSuccessView: View {
         }
         try? await Task.sleep(nanoseconds: 1_600_000_000)
         guard !Task.isCancelled else { return }
+        finish()
+    }
+
+    private func finish() {
+        guard !finished else { return }
+        finished = true
         onDone()
     }
 }

@@ -86,7 +86,7 @@ struct MacMailboxMenuItems: View {
                 Text(item.qualifiedTitle)
             }
             .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
-            .disabled(app.composeDraft != nil || app.isCommandPalettePresented)
+            .disabled(MacActions(app: app).isModalPresented || app.isCommandPalettePresented)
         }
     }
 }

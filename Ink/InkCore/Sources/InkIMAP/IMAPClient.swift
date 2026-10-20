@@ -158,9 +158,13 @@ public actor IMAPClient {
                 let detail = IMAPError.clean(result.tagged.text.text)
                 throw MailError.tlsFailed(detail.isEmpty ? "The server refused STARTTLS." : "The server refused STARTTLS: \(detail)")
             }
-            // Anything that arrived before the handshake could have been injected by an attacker.
-            parser.reset()
-            capabilities = []
+            // Bytes after the tagged OK arrived in plaintext but would be read as if they came
+            // over TLS: a response-injection attack ("NO STARTTLS", USENIX Security 2021), so
+            // the connection is abandoned rather than cleaned up (RESEARCH §3.2, STARTTLS rule 2).
+            guard parser.bufferedByteCount == 0, pendingRead == nil else {
+                throw MailError.tlsFailed("The server sent unexpected data before the secure connection started, so it can't be used safely.")
+            }
+            discardPlaintextState()
             do {
                 try await transport.startTLS()
             } catch {
@@ -168,10 +172,26 @@ public actor IMAPClient {
                 if case .tlsFailed = mapped { throw mapped }
                 throw MailError.tlsFailed(mapped.localizedDescription)
             }
+            // The first read over TLS (where certificate problems surface) happens here, before
+            // any credentials are sent (RESEARCH §3.2 rules 3 and 5, §3.4).
             try await refreshCapabilitiesUnlocked()
         } else if capabilities.isEmpty {
             try await refreshCapabilitiesUnlocked()
         }
+    }
+
+    /// Forgets everything learned before STARTTLS: none of it was protected, and untagged data
+    /// answering STARTTLS (`* CAPABILITY`, `* ENABLED`, `[ALERT]`) could have been injected.
+    private func discardPlaintextState() {
+        parser.reset()
+        parser.utf8Mode = false
+        capabilities = []
+        enabledExtensions = []
+        selectedMailbox = nil
+        serverID = nil
+        lastAlert = nil
+        commandAlert = nil
+        byeText = nil
     }
 
     /// Asks the server for its capabilities again.
@@ -290,18 +310,28 @@ public actor IMAPClient {
     /// `ENABLE` the given extensions (e.g. `QRESYNC`, `UTF8=ACCEPT`, `CONDSTORE`), skipping any
     /// the server doesn't advertise. Does nothing without the ENABLE capability.
     /// After `UTF8=ACCEPT` mailbox names travel as UTF-8 instead of modified UTF-7.
+    ///
+    /// The server lists what it turned on in `* ENABLED`, and only those count. A server that
+    /// answers OK with no `* ENABLED` at all (iCloud) is taken to have enabled everything that
+    /// was asked for (RESEARCH §3.3, §3.4).
     public func enable(_ caps: [String]) async throws {
         try await serialized {
             try self.requireAuthenticated()
             guard self.capabilities.contains("ENABLE") else { return }
             var wanted: [String] = []
-            for cap in caps.map({ $0.uppercased() }) where self.capabilities.contains(cap) && !self.enabledExtensions.contains(cap) && !wanted.contains(cap) {
+            for cap in caps.map({ $0.uppercased() })
+            where IMAPEncoder.isAtom(cap) && self.capabilities.contains(cap) && !self.enabledExtensions.contains(cap) && !wanted.contains(cap) {
                 wanted.append(cap)
             }
             guard !wanted.isEmpty else { return }
             var builder = IMAPCommandBuilder("ENABLE")
-            for cap in wanted where IMAPEncoder.isAtom(cap) { builder.raw(" \(cap)") }
-            _ = try await self.execute(builder.build())
+            for cap in wanted { builder.raw(" \(cap)") }
+            let result = try await self.execute(builder.build())
+            let reported = result.untagged.contains { if case .enabled = $0 { return true } else { return false } }
+            if !reported {
+                self.log("No ENABLED response; treating OK as success for \(wanted.joined(separator: " "))")
+                self.handle(.enabled(wanted))
+            }
         }
     }
 
@@ -415,7 +445,9 @@ public actor IMAPClient {
         case .uidValidity(let value)?: info.uidValidity = value
         case .uidNext(let value)?: info.uidNext = value
         case .unseen(let value)?: info.firstUnseen = value
-        case .permanentFlags(let flags)?: info.permanentFlags = flags
+        case .permanentFlags(let flags)?:
+            info.permanentFlags = flags
+            info.hasPermanentFlags = true
         case .highestModSeq(let value)?: info.highestModSeq = value
         case .noModSeq?: info.noModSeq = true
         case .readOnly?: info.readOnly = true
@@ -451,7 +483,7 @@ public actor IMAPClient {
             let result = try await self.send(builder.build())
             if result.tagged.status == .no {
                 if case .alreadyExists? = result.tagged.text.code { return }
-                if result.tagged.text.text.lowercased().contains("already exists") { return }
+                if IMAPText.contains(result.tagged.text.text, "already exists", ignoringASCIICase: true) { return }
             }
             try self.check(result, command: "CREATE", mailbox: rawPath)
         }
@@ -621,6 +653,11 @@ public actor IMAPClient {
 
     /// UID STORE flags (`+FLAGS.SILENT (\Seen)` etc.). Invalid flag names are left out; adding
     /// or removing nothing sends nothing.
+    ///
+    /// Keywords (`$Forwarded`, `$Junk`, …) are best effort: ones the selected mailbox can't
+    /// store (its PERMANENTFLAGS has neither `\*` nor the keyword, as on Exchange) are left out,
+    /// and if the server still refuses a STORE that mixes keywords with system flags, the system
+    /// flags are stored on their own (RESEARCH §3.4).
     public func uidStore(_ uids: IMAPSequenceSet, flags: [String], mode: IMAPStoreMode, silent: Bool = true) async throws {
         try await serialized {
             try self.requireSelected()
@@ -630,13 +667,29 @@ public actor IMAPClient {
 
     private func performStore(_ uids: IMAPSequenceSet, flags: [String], mode: IMAPStoreMode, silent: Bool) async throws {
         guard !uids.isEmpty else { return }
-        let valid = flags.filter(IMAPEncoder.isFlag)
+        var valid: [String] = []
+        for flag in flags where IMAPEncoder.isFlag(flag) {
+            if let mailbox = selectedMailbox, !mailbox.canStore(flag) {
+                log("Leaving out \(flag): this folder can't store custom keywords")
+                continue
+            }
+            valid.append(flag)
+        }
         if valid.isEmpty, mode != .replace { return }
-        var builder = self.builder("UID STORE")
-        builder.raw(" \(uids) \(mode.prefix)FLAGS\(silent ? ".SILENT" : "") ")
-        builder.flagList(valid)
-        let result = try await send(builder.build())
+        func store(_ list: [String]) async throws -> IMAPCommandResult {
+            var builder = self.builder("UID STORE")
+            builder.raw(" \(uids) \(mode.prefix)FLAGS\(silent ? ".SILENT" : "") ")
+            builder.flagList(list)
+            return try await send(builder.build())
+        }
+        var result = try await store(valid)
         if result.tagged.status == .no, case .expungeIssued? = result.tagged.text.code { return }
+        let systemFlags = valid.filter { $0.utf8.first == UInt8(ascii: "\\") }
+        if result.tagged.status != .ok, !systemFlags.isEmpty, systemFlags.count < valid.count {
+            log("STORE with keywords refused; storing the system flags alone")
+            result = try await store(systemFlags)
+            if result.tagged.status == .no, case .expungeIssued? = result.tagged.text.code { return }
+        }
         try check(result, command: "UID STORE")
     }
 
@@ -772,7 +825,7 @@ public actor IMAPClient {
         try await serialized {
             try self.requireAuthenticated()
             if let limit = self.appendLimit, message.count > limit {
-                throw MailError.serverError("The message is too large for this server (limit \(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file))).")
+                throw MailError.serverError("The message is too large for this server (limit \(Self.formatSize(limit))).")
             }
             var builder = self.builder("APPEND")
             builder.space()
@@ -790,6 +843,15 @@ public actor IMAPClient {
             if case .appendUID(_, let uids)? = result.tagged.text.code { return uids.expanded(limit: 1).first }
             return nil
         }
+    }
+
+    /// `512 KB`, `5.2 MB`, `34 MB` (binary units, as SMTPClient words its size errors). Done by
+    /// hand: ByteCountFormatter's output differs between Apple platforms and Linux.
+    static func formatSize(_ bytes: Int) -> String {
+        if bytes < 1_048_576 { return "\(max(1, (bytes + 512) / 1024)) KB" }
+        let tenths = Int((Double(bytes) / 1_048_576 * 10).rounded())
+        if tenths >= 100 { return "\((tenths + 5) / 10) MB" }
+        return "\(tenths / 10).\(tenths % 10) MB"
     }
 
     /// `APPENDLIMIT=n` from the capabilities, if any.
@@ -810,20 +872,47 @@ public actor IMAPClient {
 
     // MARK: - IDLE
 
+    /// How long one IDLE may last before it should be ended and re-issued on Gmail, which drops
+    /// connections that sit in IDLE for about 10 minutes (RESEARCH §3.4, §3.5 item 9; MailKit's
+    /// Gmail sample uses 9 minutes).
+    public static let gmailIdleInterval: TimeInterval = 9 * 60
+    /// How long one IDLE may last elsewhere: RFC 2177 allows 29 minutes before the server may
+    /// log the client off, minus a safety margin.
+    public static let standardIdleInterval: TimeInterval = 25 * 60
+
+    /// How often this server's IDLE should be re-issued: `gmailIdleInterval` on Gmail,
+    /// `standardIdleInterval` elsewhere. `idle(timeout:onEvent:)` never waits longer than this.
+    public var idleReissueInterval: TimeInterval {
+        isGmail ? Self.gmailIdleInterval : Self.standardIdleInterval
+    }
+
     /// Waits for changes with IDLE (RFC 2177). Each untagged response the server sends is
-    /// passed to `onEvent`; return false to stop. The wait also ends after `timeout` (servers
-    /// drop IDLE after about 30 minutes, so the default is 25) and when the calling task is
-    /// cancelled. In every case DONE is sent and the server's completion read, leaving the
-    /// connection ready for the next command, and the method returns normally.
+    /// passed to `onEvent`; return false to stop. The wait also ends after `timeout` and when
+    /// the calling task is cancelled. In every case DONE is sent and the server's completion
+    /// read, leaving the connection ready for the next command, and the method returns normally,
+    /// so callers loop to re-issue IDLE.
+    ///
+    /// `timeout` is the re-issue interval. Nil (the default) means `idleReissueInterval`: 9
+    /// minutes on Gmail, 25 elsewhere. A longer value is capped at `idleReissueInterval`, since
+    /// servers drop an IDLE that runs past it.
     ///
     /// The client is busy for the whole wait, so use a dedicated connection for IDLE.
-    /// `* BYE` is delivered to `onEvent` and then thrown as `.connectionFailed`.
-    public func idle(timeout: TimeInterval = 25 * 60, onEvent: @Sendable (IMAPUntagged) -> Bool) async throws {
+    /// `* BYE` is delivered to `onEvent` and then thrown as `.connectionFailed`. Servers without
+    /// IDLE throw `.notSupported` (poll with `noop()` instead; `supports("IDLE")` tells which).
+    public func idle(timeout: TimeInterval? = nil, onEvent: @Sendable (IMAPUntagged) -> Bool) async throws {
         try await serialized {
             try self.requireAuthenticated()
             guard self.capabilities.contains("IDLE") else { throw MailError.notSupported("IDLE (push updates)") }
-            try await self.performIdle(timeout: timeout, onEvent: onEvent)
+            try await self.performIdle(timeout: self.effectiveIdleTimeout(timeout), onEvent: onEvent)
         }
+    }
+
+    /// The IDLE wait for a requested timeout: the re-issue interval when none is given, never
+    /// longer than it, never negative.
+    func effectiveIdleTimeout(_ requested: TimeInterval?) -> TimeInterval {
+        let interval = idleReissueInterval
+        guard let requested, !requested.isNaN else { return interval }
+        return max(0, min(requested, interval))
     }
 
     private enum IdleStop {

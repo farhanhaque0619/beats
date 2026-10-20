@@ -1,13 +1,19 @@
 import Foundation
 import InkModel
 import InkIMAP
+import InkProviders
 
 // Live updates over a dedicated IDLE connection.
 extension IMAPMailService {
     /// Watches `mailbox` on its own connection: SELECT (read-only), then IDLE, renewed every
-    /// `Options.idleRefresh`. Yields `.changed` when messages arrive, disappear or change flags
-    /// (and after reconnecting, since something may have happened meanwhile). Servers without
-    /// IDLE are polled with NOOP every `Options.pollInterval`.
+    /// `Options.idleRefresh` (`Options.gmailIdleRefresh` on Gmail, which drops connections idle for
+    /// about ten minutes). Yields `.changed` when messages arrive, disappear or change flags (and
+    /// after reconnecting, since something may have happened meanwhile).
+    ///
+    /// Servers without IDLE, and servers that advertise it but refuse it, are polled with NOOP
+    /// every `Options.pollInterval` instead. Yahoo's and AOL's IDLE doesn't report deletions
+    /// (RESEARCH §3.4), so there IDLE is renewed every `Options.deletionCheckInterval` and each
+    /// renewal yields `.changed` for a re-sync.
     ///
     /// A dropped connection is re-established with backoff (`Options.reconnectDelays`). After
     /// `Options.maxWatchFailures` failed attempts in a row, or a sign-in failure, the stream yields
@@ -62,7 +68,13 @@ struct IMAPMailServiceWatcher: Sendable {
             } catch {
                 await client?.disconnect()
                 if Task.isCancelled { return }
-                let mapped = IMAPMailService.mailError(error)
+                let mapped = connector.advise(error, server: .imap)
+                if ProviderErrorAdvice.isAdvice(mapped) {
+                    // Something only the person can fix (IMAP switched off, app password revoked).
+                    log("Stopping: \(mapped.localizedDescription)")
+                    continuation.yield(.connectionLost)
+                    return
+                }
                 switch mapped {
                 case .authenticationFailed, .mailboxNotFound, .notSupported, .oauth, .oauthNotConfigured, .tlsFailed:
                     log("Stopping: \(mapped.localizedDescription)")
@@ -97,13 +109,28 @@ struct IMAPMailServiceWatcher: Sendable {
     private func listen(on client: IMAPClient, exists: UInt32, onHealthy: () -> Void) async throws {
         let tracker = IMAPMailServiceExistsTracker(exists)
         let continuation = self.continuation
-        let canIdle = await client.supports("IDLE")
+        var canIdle = await client.supports("IDLE")
+        let isGmail = await client.isGmail
+        let capabilities = await client.capabilities
+        let plan = IMAPMailServiceIdlePlan(options: options, isGmail: isGmail,
+                                           missesDeletions: Self.idleMissesDeletions(account: connector.account, capabilities: capabilities))
+        if !canIdle { log("The server has no IDLE; checking for changes every \(Int(options.pollInterval)) s.") }
+        var lastResync = Date()
         while !Task.isCancelled {
             if canIdle {
-                try await client.idle(timeout: options.idleRefresh) { event in
-                    if tracker.isChange(event) { continuation.yield(.changed) }
-                    return true
+                do {
+                    try await client.idle(timeout: plan.refresh) { event in
+                        if tracker.isChange(event) { continuation.yield(.changed) }
+                        return true
+                    }
+                } catch let error as MailError where Self.isRefusal(error) {
+                    // Advertised but refused (NO/BAD) on a live connection: poll instead.
+                    guard await client.state == .authenticated else { throw error }
+                    log("The server refused IDLE (\(error.localizedDescription)); checking for changes every \(Int(options.pollInterval)) s instead.")
+                    canIdle = false
+                    continue
                 }
+                if plan.resyncEachRenewal, !Task.isCancelled { continuation.yield(.changed) }
             } else {
                 do {
                     try await Task.sleep(nanoseconds: UInt64(max(0.05, options.pollInterval) * 1_000_000_000))
@@ -111,11 +138,51 @@ struct IMAPMailServiceWatcher: Sendable {
                     return
                 }
                 let events = try await client.noop()
-                if events.contains(where: tracker.isChange) { continuation.yield(.changed) }
+                if events.contains(where: tracker.isChange) {
+                    continuation.yield(.changed)
+                    lastResync = Date()
+                } else if plan.resyncEachRenewal, Date().timeIntervalSince(lastResync) >= plan.refresh {
+                    // NOOP may miss deletions too on these servers.
+                    continuation.yield(.changed)
+                    lastResync = Date()
+                }
             }
             // A full IDLE (or poll) cycle went by: the connection is healthy.
             onHealthy()
         }
+    }
+}
+
+extension IMAPMailServiceWatcher {
+    /// A NO or BAD answer, as opposed to a dead connection.
+    static func isRefusal(_ error: MailError) -> Bool {
+        switch error {
+        case .serverError, .protocolError, .notSupported: return true
+        default: return false
+        }
+    }
+
+    /// Yahoo's and AOL's IDLE reports new mail but not deletions (RESEARCH §3.4). Recognised by
+    /// provider, server host, or Yahoo's `XYMHIGHESTMODSEQ` capability.
+    static func idleMissesDeletions(account: AccountConfig, capabilities: Set<String>) -> Bool {
+        if account.provider == .yahoo || account.provider == .aol { return true }
+        if capabilities.contains("XYMHIGHESTMODSEQ") { return true }
+        let host = account.imap.host.lowercased()
+        return ["yahoo.com", "aol.com"].contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+}
+
+/// How long each IDLE lasts on a server, and whether renewing it should trigger a re-sync.
+struct IMAPMailServiceIdlePlan: Equatable {
+    var refresh: TimeInterval
+    var resyncEachRenewal: Bool
+
+    init(options: IMAPMailService.Options, isGmail: Bool, missesDeletions: Bool) {
+        var refresh = options.idleRefresh
+        if isGmail { refresh = min(refresh, options.gmailIdleRefresh) }
+        if missesDeletions { refresh = min(refresh, options.deletionCheckInterval) }
+        self.refresh = max(0.05, refresh)
+        resyncEachRenewal = missesDeletions
     }
 }
 

@@ -523,7 +523,7 @@ public actor SMTPClient {
     private static func isTooManyRecipients(_ reply: SMTPReply) -> Bool {
         guard reply.code == 452 || reply.code == 451 else { return false }
         if reply.enhancedStatus == "4.5.3" { return true }
-        return reply.text.lowercased().contains("too many recipients")
+        return SMTPText.contains(reply.text, "too many recipients")
     }
 
     private static func isSizeFailure(_ reply: SMTPReply) -> Bool {

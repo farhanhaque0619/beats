@@ -272,11 +272,33 @@ private enum ReaderAttachmentKind {
 
 // MARK: - Temporary files
 
-/// Attachment files under the app's temporary directory (the system clears it on its own).
+/// Attachment files under the app's temporary directory. They exist so Quick Look, Share and
+/// the Mac's default apps have a real file; whatever an earlier launch left behind is deleted
+/// the first time this launch writes one, so mail doesn't pile up unencrypted in tmp.
 enum ReaderAttachmentFiles {
     private static var root: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("Ink Attachments", isDirectory: true)
     }
+
+    /// Runs once per launch, off the main thread (from the first write). Keeps anything touched
+    /// in the last hour in case another app still has it open.
+    private static let purgeEarlierFiles: Void = {
+        let manager = FileManager.default
+        let cutoff = Date().addingTimeInterval(-60 * 60)
+        func purge(_ directory: URL) {
+            let keys: [URLResourceKey] = [.contentModificationDateKey, .isDirectoryKey]
+            guard let entries = try? manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys) else { return }
+            for entry in entries {
+                let values = try? entry.resourceValues(forKeys: Set(keys))
+                if entry.lastPathComponent == "Export", values?.isDirectory == true {
+                    purge(entry)
+                } else if (values?.contentModificationDate ?? .distantPast) < cutoff {
+                    try? manager.removeItem(at: entry)
+                }
+            }
+        }
+        purge(FileManager.default.temporaryDirectory.appendingPathComponent("Ink Attachments", isDirectory: true))
+    }()
 
     /// A stable folder name per message and part, so each file keeps its original name.
     static func folder(messageID: String, attachmentID: String) -> String {
@@ -292,8 +314,15 @@ enum ReaderAttachmentFiles {
         let directory = root.appendingPathComponent(folder, isDirectory: true)
         let name = sanitized(filename)
         return try await Task.detached(priority: .userInitiated) {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            _ = ReaderAttachmentFiles.purgeEarlierFiles
+            let manager = FileManager.default
             let url = directory.appendingPathComponent(name, isDirectory: false)
+            // Already written (the message was opened before): don't copy megabytes again.
+            if let size = (try? manager.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,
+               size.intValue == data.count {
+                return url
+            }
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
             return url
         }.value
@@ -305,6 +334,7 @@ enum ReaderAttachmentFiles {
             .appendingPathComponent("Export", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         return try await Task.detached(priority: .userInitiated) {
+            _ = ReaderAttachmentFiles.purgeEarlierFiles
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let destination = directory.appendingPathComponent(source.lastPathComponent, isDirectory: false)
             try FileManager.default.copyItem(at: source, to: destination)

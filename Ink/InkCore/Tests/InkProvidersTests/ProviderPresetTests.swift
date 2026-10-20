@@ -50,7 +50,7 @@ final class ProviderPresetTests: XCTestCase {
         XCTAssertEqual(icloud.appPassword?.url?.absoluteString, "https://account.apple.com")
         XCTAssertTrue(icloud.appPassword?.steps.joined().contains("App-Specific Passwords") ?? false)
         XCTAssertTrue(icloud.appPassword?.steps.joined().contains("Sign-In and Security") ?? false)
-        XCTAssertTrue(icloud.notes.contains { $0.contains("full iCloud address") })
+        XCTAssertTrue(icloud.notes.contains { $0.contains("primary iCloud Mail address") })
         XCTAssertTrue(icloud.usernameHint.contains("iCloud"))
     }
 
@@ -81,17 +81,20 @@ final class ProviderPresetTests: XCTestCase {
         XCTAssertEqual(yahoo.smtp.security, .tls)
         XCTAssertEqual(yahoo.appPassword?.url?.absoluteString, "https://login.yahoo.com/account/security")
         XCTAssertTrue(yahoo.domains.contains("ymail.com"))
+        XCTAssertTrue(yahoo.savesSentAutomatically)
 
         let aol = try XCTUnwrap(Providers.preset(for: .aol))
         XCTAssertEqual([aol.imap.host, aol.smtp.host], ["imap.aol.com", "smtp.aol.com"])
         XCTAssertEqual([aol.imap.port, aol.smtp.port], [993, 465])
         XCTAssertNotNil(aol.appPassword)
+        XCTAssertTrue(aol.savesSentAutomatically)
 
         let fastmail = try XCTUnwrap(Providers.preset(for: .fastmail))
         XCTAssertEqual([fastmail.imap.host, fastmail.smtp.host], ["imap.fastmail.com", "smtp.fastmail.com"])
         XCTAssertEqual([fastmail.imap.port, fastmail.smtp.port], [993, 465])
         XCTAssertTrue(fastmail.appPassword?.steps.first?.contains("Privacy & Security") ?? false)
         XCTAssertTrue(fastmail.mxSuffixes.contains("messagingengine.com"))
+        XCTAssertFalse(fastmail.savesSentAutomatically, "Fastmail doesn't file sent mail by default")
 
         let zoho = try XCTUnwrap(Providers.preset(for: .zoho))
         XCTAssertEqual([zoho.imap.host, zoho.smtp.host], ["imap.zoho.com", "smtp.zoho.com"])
@@ -99,6 +102,7 @@ final class ProviderPresetTests: XCTestCase {
         XCTAssertTrue(zoho.authOptions.contains(.password))
         XCTAssertNotNil(zoho.appPassword)
         XCTAssertTrue(zoho.notes.contains { $0.contains("IMAP") })
+        XCTAssertTrue(zoho.savesSentAutomatically)
     }
 
     func testEveryPresetIsWellFormed() {
@@ -195,7 +199,8 @@ final class ProviderPresetTests: XCTestCase {
         XCTAssertEqual(account.provider, .icloud)
         XCTAssertEqual(account.emailAddress, "grace@icloud.com")
         XCTAssertEqual(account.displayName, "Grace Hopper")
-        XCTAssertEqual(account.imap, ServerConfig(host: "imap.mail.me.com", port: 993, security: .tls, username: "grace@icloud.com"))
+        // iCloud IMAP takes the name part of the address; SMTP the full address (RESEARCH §2.2).
+        XCTAssertEqual(account.imap, ServerConfig(host: "imap.mail.me.com", port: 993, security: .tls, username: "grace"))
         XCTAssertEqual(account.smtp, ServerConfig(host: "smtp.mail.me.com", port: 587, security: .startTLS, username: "grace@icloud.com"))
         XCTAssertEqual(account.authMethod, .password)
         XCTAssertNil(account.oauthProvider)

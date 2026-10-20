@@ -14,6 +14,8 @@ struct PhoneRootView: View {
     @Namespace private var zoomNamespace
     /// Set by the mailbox switcher; acted on once its sheet has fully closed.
     @State private var switcherFollowUp: MailboxSwitcherFollowUp?
+    /// Zero on phones with a Home button, where the compose button needs more room below it.
+    @State private var bottomSafeArea: CGFloat = 34
 
     var body: some View {
         @Bindable var app = app
@@ -22,6 +24,16 @@ struct PhoneRootView: View {
                 .navigationDestination(for: String.self) { conversationID in
                     ThreadScreen(conversationID: conversationID)
                         .navigationTransition(.zoom(sourceID: conversationID, in: zoomNamespace))
+                }
+        }
+        .background {
+            // Measured edge to edge, so the proxy reports the device's bottom inset.
+            Color.clear
+                .ignoresSafeArea()
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.safeAreaInsets.bottom
+                } action: { inset in
+                    bottomSafeArea = inset
                 }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -33,13 +45,13 @@ struct PhoneRootView: View {
             }
             .animation(InkMotion.bouncy, value: app.phonePath.isEmpty)
             .padding(.trailing, InkSpace.gutter)
-            .padding(.bottom, InkSpace.s)
+            .padding(.bottom, bottomSafeArea > 0 ? InkSpace.s : InkSpace.m)
         }
         .sheet(isPresented: $app.isMailboxSwitcherPresented, onDismiss: { runSwitcherFollowUp() }) {
             MailboxSwitcher(onFollowUp: { followUp in switcherFollowUp = followUp })
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(Ink.background)
+                .presentationBackground(Ink.surface)
                 .presentationCornerRadius(InkRadius.sheet)
                 .environment(app)
                 .environment(store)

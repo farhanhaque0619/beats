@@ -42,7 +42,15 @@ download.
 You need: your MacBook, a USB-C cable, and an iPhone on iOS 18 or later.
 
 1. Install **Xcode** from the Mac App Store (it's large, so give it time). Open it once and let it
-   install its components. If your iPhone runs a newer iOS than Xcode knows about, update Xcode.
+   install its components. Which version depends on your Mac:
+
+   | Your Mac runs | Use |
+   |---|---|
+   | macOS 27, or Tahoe 26.6 and later | Xcode 27.1 (required on macOS 27) |
+   | macOS Tahoe 26.2–26.5 | Xcode 26.5 or 26.6 |
+   | macOS Sequoia 15.6 and later | Xcode 26.3 |
+
+   All of them can install onto an iPhone on iOS 27.
 2. Get the code:
    ```bash
    git clone https://github.com/farhanhaque0619/beats.git
@@ -60,10 +68,18 @@ You need: your MacBook, a USB-C cable, and an iPhone on iOS 18 or later.
 6. The first time, iOS says the developer isn't trusted. Open **Settings › General › VPN & Device
    Management**, tap your Apple ID, then **Trust**. Open Ink.
 
-**Limits of the free route:** the app stops opening after **7 days**. Plug in the phone and press
-⌘R again to renew it; your accounts and settings stay. A free team can have 3 sideloaded apps per
-device. After the first install you can also run over Wi-Fi: **Window › Devices and Simulators ›
-Connect via network**.
+**Every week:** the free route's install stops opening after **7 days**. Renew it with one command
+(it builds, signs with your team and installs; your accounts and settings stay):
+
+```bash
+cd beats/Ink
+cp Config/Local.xcconfig.example Config/Local.xcconfig   # once; set DEVELOPMENT_TEAM
+./scripts/install-iphone.sh
+```
+
+Or plug in the phone and press ⌘R in Xcode. Free teams are limited to 3 sideloaded apps per device,
+3 devices and 10 app IDs per week, and can't use push notifications or iCloud, which is why Ink
+checks for mail in the background instead and why accounts are set up separately on each device.
 
 ### B. TestFlight (needs the $99/year Apple Developer Program)
 
@@ -75,7 +91,8 @@ One-time setup:
 2. In [App Store Connect](https://appstoreconnect.apple.com) › **Apps › +** › **New App**: platform
    iOS, name "Ink" (or anything that's free), bundle ID `io.github.farhanhaque0619.ink` (register it
    under Certificates, Identifiers & Profiles › Identifiers first if it isn't listed).
-3. **Users and Access › Integrations › App Store Connect API › Team Keys › +**, role **App Manager**.
+3. **Users and Access › Integrations › App Store Connect API › Team Keys › +**, role **Admin**
+   (cloud-managed signing needs Admin; only the Account Holder can turn on API access).
    Download the `.p8` key (you only get one chance) and note the **Key ID** and **Issuer ID**.
 4. In GitHub: **repo Settings › Secrets and variables › Actions › New repository secret**:
    - `ASC_KEY_ID`: the Key ID
@@ -90,6 +107,10 @@ Each time you want a build on your phone: **Actions › Ink › Run workflow**, 
 TestFlight**, then **Run**. Or put `[testflight]` in a commit message. Builds show up in the
 TestFlight app after Apple finishes processing them (usually 5–30 minutes). Internal testing needs no
 App Review.
+
+Two caveats. The first CI run may need a retry if automatic signing creates a new certificate on the
+fresh runner (see docs/RESEARCH.md §6.3 for the fallback). And from **April 2027** Apple only accepts
+uploads built with the iOS 27 SDK (Xcode 27), so the TestFlight job will need a newer runner by then.
 
 ### C. Sideload the unsigned build
 

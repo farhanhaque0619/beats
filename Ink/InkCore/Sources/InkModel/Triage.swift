@@ -53,8 +53,9 @@ public struct SwipeConfiguration: Codable, Hashable, Sendable {
         self.leftLong = leftLong
     }
 
-    /// Swipe right to mark read, keep going to archive; swipe left to snooze, keep going to trash.
-    public static let standard = SwipeConfiguration(rightShort: .toggleRead, rightLong: .archive, leftShort: .snooze, leftLong: .trash)
+    /// Apple Mail's muscle memory: swipe left to archive, keep going to trash; swipe right to
+    /// mark read, keep going to snooze.
+    public static let standard = SwipeConfiguration(rightShort: .toggleRead, rightLong: .snooze, leftShort: .archive, leftLong: .trash)
 }
 
 /// A ready-made snooze time.

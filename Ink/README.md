@@ -13,8 +13,8 @@ Email, quieter. A native email app for iPhone and Mac: black and white, one hint
   talks to your provider over IMAP and SMTP with TLS. There's no Ink server in between, and
   passwords stay in the Keychain. [How to connect each provider →](docs/ACCOUNTS.md)
 - **All Inboxes, split in two.** People in **Focus**; newsletters and notifications in **Other**.
-- **Swipe to triage.** Swipe right a little to mark read, further to archive. Swipe left to snooze,
-  further to trash. Each threshold gives a haptic tick and its own colour, and every swipe is
+- **Swipe to triage.** Swipe left a little to archive, further to trash. Swipe right to mark read,
+  further to snooze (the same muscle memory as Apple Mail). Each threshold gives a haptic tick and its own colour, and every swipe is
   configurable. Undo is always one tap away: actions wait a few seconds before they reach the server.
 - **Snooze** to later today, tonight, tomorrow, the weekend or next week. Snoozed mail comes back
   to the top, unread.

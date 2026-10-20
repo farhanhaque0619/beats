@@ -286,6 +286,14 @@ public enum OAuthClient {
   - `refreshAllInboxes()` returns messages that arrived after a persisted per-account high-water mark (highest
     UID / received date seen by the previous `refreshAllInboxes` call), so foreground refreshes in between don't
     swallow the "new mail" set used for notifications. Only unread, non-bulk inbox messages.
+  - `conversation(id:)` finds a conversation anywhere in the cache (any scope, search results, snoozed), not just in
+    the current `conversations` list: the reader opens threads from search and from other scopes.
+  - Triage calls (`perform`, `archive`, …) update `conversations` synchronously so the UI's `withAnimation` around them
+    animates the list closing up.
+  - `syncStatus` is `.syncing` while a refresh runs and `lastSyncedAt` is set after a successful one (the first-load
+    shimmer depends on both).
+  - `addAccount` removes the demo account when it's the only account; `updateAccount` persists name/signature/colour;
+    `removeAccount` deletes the credential and the cache.
 
 ## App (SwiftUI)
 

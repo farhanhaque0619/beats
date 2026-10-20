@@ -181,7 +181,8 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
         if let transportError = error as? TransportError { return transportError }
         let (host, port) = lock.withLock { (self.host, self.port) }
         if let urlError = error as? URLError {
-            return Self.describe(urlError.code, host: host, port: port, connecting: connecting)
+            return Self.describe(urlErrorCode: urlError.code.rawValue, fallback: urlError.localizedDescription,
+                                 host: host, port: port, connecting: connecting)
         }
 
         // Stream tasks also report the socket's and Network.framework's own errors unwrapped.
@@ -192,7 +193,8 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
             if nsError.code == 1 || nsError.code == 2 {
                 return TransportError.connectFailed("No server named \(host) was found.")
             }
-            return Self.describe(URLError.Code(rawValue: nsError.code), host: host, port: port, connecting: connecting)
+            return Self.describe(urlErrorCode: nsError.code, fallback: nsError.localizedDescription,
+                                 host: host, port: port, connecting: connecting)
         case NSPOSIXErrorDomain, "kNWErrorDomainPOSIX":
             if let code = POSIXErrorCode(rawValue: Int32(truncatingIfNeeded: nsError.code)),
                let mapped = Self.describe(code, host: host, port: port, connecting: connecting) {
@@ -211,30 +213,33 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
         return TransportError.io(nsError.localizedDescription)
     }
 
-    private static func describe(_ code: URLError.Code, host: String, port: Int, connecting: Bool) -> Error {
+    /// URL loading system codes (`URLError.Code` raw values, shared by CFNetwork's domain).
+    private static func describe(urlErrorCode code: Int, fallback: String, host: String, port: Int, connecting: Bool) -> Error {
+        typealias Code = URLError.Code
         switch code {
-        case .cancelled:
+        case Code.cancelled.rawValue:
             return TransportError.closed
-        case .timedOut:
+        case Code.timedOut.rawValue:
             return connecting ? TransportError.connectFailed("\(host) didn't answer on port \(port).") : TransportError.timeout
-        case .secureConnectionFailed:
+        case Code.secureConnectionFailed.rawValue:
             return TransportError.tlsFailed("The secure handshake with \(host) failed.")
-        case .serverCertificateUntrusted, .serverCertificateHasUnknownRoot:
+        case Code.serverCertificateUntrusted.rawValue, Code.serverCertificateHasUnknownRoot.rawValue:
             return TransportError.tlsFailed("The certificate of \(host) isn't trusted.")
-        case .serverCertificateHasBadDate, .serverCertificateNotYetValid:
+        case Code.serverCertificateHasBadDate.rawValue, Code.serverCertificateNotYetValid.rawValue:
             return TransportError.tlsFailed("The certificate of \(host) has expired or isn't valid yet.")
-        case .clientCertificateRejected, .clientCertificateRequired:
+        case Code.clientCertificateRejected.rawValue, Code.clientCertificateRequired.rawValue:
             return TransportError.tlsFailed("\(host) asked for a client certificate.")
-        case .cannotFindHost, .dnsLookupFailed:
+        case Code.cannotFindHost.rawValue, Code.dnsLookupFailed.rawValue:
             return TransportError.connectFailed("No server named \(host) was found.")
-        case .cannotConnectToHost:
+        case Code.cannotConnectToHost.rawValue:
             return TransportError.connectFailed("\(host) isn't accepting connections on port \(port).")
-        case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive:
+        case Code.notConnectedToInternet.rawValue, Code.dataNotAllowed.rawValue,
+             Code.internationalRoamingOff.rawValue, Code.callIsActive.rawValue:
             return TransportError.connectFailed("You're offline.")
-        case .networkConnectionLost:
+        case Code.networkConnectionLost.rawValue:
             return TransportError.connectFailed("The network connection was lost.")
         default:
-            return TransportError.io(URLError(code).localizedDescription)
+            return TransportError.io(fallback)
         }
     }
 

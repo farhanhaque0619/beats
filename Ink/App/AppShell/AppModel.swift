@@ -349,9 +349,43 @@ final class AppModel {
         #endif
     }
 
-    // MARK: Mac new-mail notifications
+    // MARK: Screenshots
 
-    #if os(macOS)
+    private func prepareScreenshot() {
+        guard let screenshot else { return }
+        let threaded = store.conversations.first { $0.count >= 3 } ?? store.conversations.first
+        switch screenshot {
+        case .welcome, .inbox, .swipe, .mailboxes:
+            if screenshot == .mailboxes { isMailboxSwitcherPresented = true }
+        case .thread:
+            if let threaded { phonePath = [threaded.id] }
+        case .compose:
+            if let message = threaded?.messages.last {
+                var draft = store.draft(replyingTo: message, mode: .reply, body: store.cachedBody(for: message))
+                draft.body = "Sounds great — Thursday works for me. I'll bring the revised deck.\n\nAlex"
+                composeDraft = draft
+            } else {
+                compose()
+            }
+        case .search:
+            isSearchPresented = true
+        case .settings:
+            isSettingsPresented = true
+        case .snooze:
+            if let first = store.conversations.first {
+                snoozeTargets = [first]
+                isSnoozePickerPresented = true
+            }
+        case .macInbox:
+            if let threaded { selection = [threaded.id] }
+        }
+    }
+}
+
+// MARK: - Mac new-mail notifications
+
+#if os(macOS)
+extension AppModel {
     /// Checks at least this often while Ink isn't the active app.
     private static let newMailCheckInterval: TimeInterval = 5 * 60
 
@@ -389,40 +423,8 @@ final class AppModel {
             }
         }
     }
-    #endif
-
-    // MARK: Screenshots
-
-    private func prepareScreenshot() {
-        guard let screenshot else { return }
-        let threaded = store.conversations.first { $0.count >= 3 } ?? store.conversations.first
-        switch screenshot {
-        case .welcome, .inbox, .swipe, .mailboxes:
-            if screenshot == .mailboxes { isMailboxSwitcherPresented = true }
-        case .thread:
-            if let threaded { phonePath = [threaded.id] }
-        case .compose:
-            if let message = threaded?.messages.last {
-                var draft = store.draft(replyingTo: message, mode: .reply, body: store.cachedBody(for: message))
-                draft.body = "Sounds great — Thursday works for me. I'll bring the revised deck.\n\nAlex"
-                composeDraft = draft
-            } else {
-                compose()
-            }
-        case .search:
-            isSearchPresented = true
-        case .settings:
-            isSettingsPresented = true
-        case .snooze:
-            if let first = store.conversations.first {
-                snoozeTargets = [first]
-                isSnoozePickerPresented = true
-            }
-        case .macInbox:
-            if let threaded { selection = [threaded.id] }
-        }
-    }
 }
+#endif
 
 #if os(iOS)
 /// Background execution time for finishing work after the app leaves the screen. Ended

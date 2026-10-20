@@ -27,7 +27,7 @@ final class IMAPMailServiceSentCopyTests: XCTestCase {
     /// The Message-ID the service searched for, and the one in the uploaded copy, if any.
     private func ids(in transcript: String) -> (searched: [String], appended: String?) {
         func matches(_ pattern: String) -> [String] {
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
             let range = NSRange(transcript.startIndex..., in: transcript)
             return regex.matches(in: transcript, range: range).compactMap { match in
                 Range(match.range(at: 1), in: transcript).map { String(transcript[$0]) }

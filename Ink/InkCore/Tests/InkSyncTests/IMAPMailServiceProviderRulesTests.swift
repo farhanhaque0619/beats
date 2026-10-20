@@ -71,11 +71,13 @@ final class IMAPMailServiceProviderRulesTests: XCTestCase {
 
     func testICloudRetryUsesANewConnectionWhenTheServerHangsUp() async throws {
         let account = icloudAccount(username: "ada@icloud.com")
-        let first = ScriptedTransport([
+        // The server says goodbye after the refusal and closes the socket: the retry on that
+        // connection goes nowhere.
+        let first = IMAPServiceDroppingTransport(ScriptedTransport([
             Self.icloudGreeting,
             .expect("* AUTHENTICATE PLAIN \(plain("ada@icloud.com"))",
                     reply: "{TAG} NO [AUTHENTICATIONFAILED] Authentication failed.\r\n* BYE Too many failed attempts.\r\n"),
-        ])
+        ]), dropOn: plain("ada"))
         let second = ScriptedTransport([
             Self.icloudGreeting,
             .expect("* AUTHENTICATE PLAIN \(plain("ada"))", reply: "{TAG} OK [CAPABILITY \(Self.icloudCapabilities)] Authentication successful.\r\n"),
@@ -86,6 +88,7 @@ final class IMAPMailServiceProviderRulesTests: XCTestCase {
         let boxes = try await service.mailboxes()
         XCTAssertEqual(boxes.first?.role, .inbox)
         XCTAssertEqual(queue.openedCount, 2)
+        XCTAssertTrue(second.transcript.contains(plain("ada")))
         XCTAssertEqual(service.verifiedAccount.imap.username, "ada")
     }
 

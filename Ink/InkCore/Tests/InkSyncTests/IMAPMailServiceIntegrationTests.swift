@@ -259,6 +259,51 @@ final class IMAPMailServiceIntegrationTests: XCTestCase {
         XCTAssertEqual(sentCopy.messageID, summary.messageID)
     }
 
+    // MARK: - Sent copies (RESEARCH §3.8)
+
+    func testSentCopyGreenMail() async throws { try await scenarioSentCopy(try require(Server.greenMail())) }
+    func testSentCopyDovecot() async throws { try await scenarioSentCopy(try require(Server.dovecot())) }
+
+    /// Neither test server files sent mail, so Ink uploads exactly one copy; when a copy with
+    /// the Message-ID is already there (as on servers that file their own), it uploads none.
+    private func scenarioSentCopy(_ server: Server) async throws {
+        let id = uniqueID()
+        let ada = server.account("ada-\(id)"), bob = server.account("bob-\(id)")
+        var options = Server.options
+        options.sentCopyPollDelays = [0, 0.2, 0.2]
+        options.sentCopyPatientPollDelays = [0, 0.2]
+        func service() -> IMAPMailService {
+            IMAPMailService(account: ada, credentials: InMemoryCredentialStore([ada.id: .password(server.password)]),
+                            transportFactory: { SocketTransport() }, options: options)
+        }
+        let first = service()
+        let subject = "Sent copy \(id)"
+        try await deliver(first, from: ada, to: [bob], subject: subject, body: "Filed once.")
+        let learned = await first.serverSavesSentCopies
+        XCTAssertEqual(learned, false, "\(server.name) doesn't file sent mail")
+
+        let sent = try await mailbox(first, role: .sent)
+        let client = try await server.client(ada)
+        _ = try await client.select(sent.rawPath)
+        let copies = try await client.uidSearch(.subject(subject))
+        XCTAssertEqual(copies.count, 1, "exactly one copy in \(sent.path)")
+
+        // A copy the "server" filed itself: found by Message-ID, nothing uploaded.
+        let messageID = "\(UUID().uuidString)@\(server.domain)"
+        try await appendMessage(client, to: sent.rawPath, subject: "Server copy \(id)", from: ada.emailAddress, to: bob.emailAddress,
+                                body: "Filed by the server.", messageID: messageID)
+        let second = service()
+        try await second.fileSentCopy(Data("Subject: Server copy \(id)\r\n\r\nInk's copy\r\n".utf8), messageID: messageID)
+        let learnedAgain = await second.serverSavesSentCopies
+        XCTAssertEqual(learnedAgain, true)
+        _ = try await client.noop()
+        let serverCopies = try await client.uidSearch(.subject("Server copy \(id)"))
+        XCTAssertEqual(serverCopies.count, 1, "no second copy uploaded")
+        await client.logout()
+        await first.disconnect()
+        await second.disconnect()
+    }
+
     // MARK: - summaries and bodies of real-world mail
 
     func testSummariesAndBodiesGreenMail() async throws { try await scenarioSummariesAndBodies(try require(Server.greenMail())) }

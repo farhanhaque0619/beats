@@ -47,7 +47,13 @@ final class AppSettings {
     /// Lines of preview text in the list (0, 1 or 2).
     var previewLines: Int { didSet { save(previewLines, "previewLines") } }
     var markReadOnOpen: Bool { didSet { save(markReadOnOpen, "markReadOnOpen") } }
-    var notificationsEnabled: Bool { didSet { save(notificationsEnabled, "notificationsEnabled") } }
+    var notificationsEnabled: Bool {
+        didSet {
+            save(notificationsEnabled, "notificationsEnabled")
+            // The icon badge is only kept up to date while notifications are on.
+            if !notificationsEnabled { Notifier.updateBadge(count: 0) }
+        }
+    }
     /// After archiving from the reader, go to the next conversation instead of back to the list.
     var advanceToNext: Bool { didSet { save(advanceToNext, "advanceToNext") } }
 

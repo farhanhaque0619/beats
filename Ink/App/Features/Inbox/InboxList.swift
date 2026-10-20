@@ -55,7 +55,8 @@ struct InboxList: View {
     /// Ends the cold-start shimmer even if nothing ever reports a sync.
     @State private var hasSettled = false
 
-    /// How far the screenshot scene's first row is swiped: left,, between the short and long thresholds: the archive (by default) about to commit.
+    /// How far the screenshot scene's first row is swiped: left, between the short and long
+    /// thresholds, so it shows the default archive about to commit.
     private static let screenshotSwipeFraction: CGFloat = -0.42
 
     private static var rowTransition: AnyTransition {

@@ -143,6 +143,23 @@ final class IMAPMailServiceWatchTests: XCTestCase {
         task.cancel()
     }
 
+    func testDroppedStreamStopsTheWatcher() async throws {
+        let script = ScriptedTransport(T.dovecotLogin() + [
+            Self.examine,
+            .expect("* IDLE", reply: "+ idling\r\n"),
+            .expect("DONE", reply: "A003 OK Idle completed.\r\n"),
+            T.logoutStep,
+        ])
+        let service = F.service(account, transports: IMAPServiceTransportQueue([script]))
+        do {
+            // Never iterated: dropping the stream ends the watch.
+            _ = service.watch(mailbox: inbox)
+        }
+        await wait { service.watchRegistry.count == 0 }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertFalse(script.transcript.contains("IDLE") && !script.transcript.contains("DONE"), "no IDLE left running")
+    }
+
     func testExistsTracker() {
         let tracker = IMAPMailServiceExistsTracker(10)
         XCTAssertFalse(tracker.isChange(.exists(10)))

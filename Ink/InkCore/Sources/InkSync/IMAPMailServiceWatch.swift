@@ -16,13 +16,16 @@ extension IMAPMailService {
     public nonisolated func watch(mailbox: MailboxInfo) -> AsyncStream<MailboxChange> {
         let (stream, continuation) = AsyncStream.makeStream(of: MailboxChange.self, bufferingPolicy: .bufferingNewest(2))
         let watcher = IMAPMailServiceWatcher(connector: connector, mailbox: mailbox, continuation: continuation)
-        let task = Task.detached { await watcher.run() }
+        // Registered and wired for termination before the task exists, so a consumer that goes
+        // away at once (or a watch that ends at once) can't leave a connection running.
+        let handle = IMAPMailServiceWatchHandle()
         let registry = watchRegistry
-        let token = registry.add(task)
+        let token = registry.add(handle)
         continuation.onTermination = { _ in
-            task.cancel()
+            handle.cancel()
             registry.remove(token)
         }
+        handle.start(Task.detached { await watcher.run() })
         return stream
     }
 }

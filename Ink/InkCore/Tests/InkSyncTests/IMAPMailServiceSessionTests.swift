@@ -48,6 +48,23 @@ final class IMAPMailServiceSessionTests: XCTestCase {
         XCTAssertFalse(script.transcript.contains("BODY.PEEK[]"), "sync never downloads whole messages")
     }
 
+    func testLargeWindowsAreFetchedInBatches() async throws {
+        var options = F.fastOptions
+        options.fetchBatchSize = 2
+        let script = ScriptedTransport(T.dovecotLogin() + [
+            T.dovecotSelect(exists: 5, uidNext: 6, modSeq: 1),
+            .expect("* FETCH 1:2 \(T.summaryItemsPrefix)", reply: summaryLine(1, 1, subject: "1") + summaryLine(2, 2, subject: "2") + T.ok()),
+            .expect("* FETCH 3:4 \(T.summaryItemsPrefix)", reply: summaryLine(3, 3, subject: "3") + summaryLine(4, 4, subject: "4") + T.ok()),
+            .expect("* FETCH 5 \(T.summaryItemsPrefix)", reply: summaryLine(5, 5, subject: "5") + T.ok()),
+            .expect("* UID FETCH 1:2 (UID BODY.PEEK[1]<0.2048>)", reply: T.ok()),
+            .expect("* UID FETCH 3:4 (UID BODY.PEEK[1]<0.2048>)", reply: T.ok()),
+            .expect("* UID FETCH 5 (UID BODY.PEEK[1]<0.2048>)", reply: T.ok()),
+        ])
+        let service = F.service(account, transports: IMAPServiceTransportQueue([script]), options: options)
+        let result = try await service.sync(mailbox: inbox, previous: nil, limit: 50)
+        XCTAssertEqual(result.upserted.map(\.uid), [5, 4, 3, 2, 1])
+    }
+
     func testEmptyMailboxAndUnknownUIDNext() async throws {
         let script = ScriptedTransport(T.dovecotLogin() + [
             .expect("* SELECT INBOX (CONDSTORE)", reply: "* 0 EXISTS\r\n* OK [UIDVALIDITY 9] Ok\r\n{TAG} OK [READ-WRITE] Selected\r\n"),

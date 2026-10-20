@@ -42,7 +42,7 @@ extension IMAPMailService {
     /// - trash / markSpam: MOVE to Trash / Junk (created on servers that have none, except Gmail).
     /// - moveToInbox: checks where the summary says the message is, then finds it by X-GM-MSGID
     ///   (Gmail) or Message-ID in All Mail / Archive, Trash and Spam, and moves it back (Gmail
-    ///   copies from All Mail, which adds the Inbox label).
+    ///   copies from All Mail and labels, which adds the Inbox label and keeps the others).
     /// - move: MOVE to the folder with that path.
     /// - deletePermanently: `\Deleted` + `UID EXPUNGE` of just those messages (Gmail moves them
     ///   to Trash first, since expunging elsewhere only removes a label).
@@ -257,7 +257,7 @@ extension IMAPMailService {
             guard !here.isEmpty else { continue }
             let set = IMAPSequenceSet(here.map(\.uid))
             if resolved.role != .inbox {
-                if isGmail && resolved.role == .all {
+                if Self.copiesToInbox(isGmail: isGmail, from: resolved.role) {
                     _ = try await client.uidCopy(set, to: inbox.rawPath)
                 } else {
                     _ = try await client.uidMove(set, to: inbox.rawPath)
@@ -291,7 +291,7 @@ extension IMAPMailService {
             guard !found.isEmpty else { continue }
             let set = IMAPSequenceSet(found.map(\.uid))
             if box.role != .inbox {
-                if isGmail && box.role == .all {
+                if Self.copiesToInbox(isGmail: isGmail, from: box.role) {
                     _ = try await client.uidCopy(set, to: inbox.rawPath)
                 } else {
                     _ = try await client.uidMove(set, to: inbox.rawPath)
@@ -304,6 +304,12 @@ extension IMAPMailService {
         }
         if located == 0 { throw MailError.messageNotFound }
         if !remaining.isEmpty { log("Couldn't find \(remaining.count) message(s) to move back to the inbox.") }
+    }
+
+    /// On Gmail, putting a message back in the inbox means adding the Inbox label (COPY), which
+    /// keeps its other labels; only Trash and Spam need a real MOVE. Elsewhere it's always a MOVE.
+    static func copiesToInbox(isGmail: Bool, from role: MailboxRole) -> Bool {
+        isGmail && role != .trash && role != .junk
     }
 
     // MARK: Finding messages by identity

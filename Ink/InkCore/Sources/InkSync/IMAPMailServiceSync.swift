@@ -227,12 +227,12 @@ extension IMAPMailService {
     /// Summaries (with snippets) for a range of sequence numbers, in batches.
     func fetchSummaries(sequence range: ClosedRange<UInt32>, path: String, uidValidity: UInt32, client: IMAPClient) async throws -> [MessageSummary] {
         var responses: [IMAPFetchResponse] = []
-        let batch = UInt32(clamping: max(1, options.fetchBatchSize))
+        let batch = UInt64(max(1, options.fetchBatchSize))
         var lower = range.lowerBound
-        while lower <= range.upperBound {
-            let upper = min(range.upperBound, lower &+ batch &- 1)
+        while true {
+            let upper = UInt32(min(UInt64(range.upperBound), UInt64(lower) + batch - 1))
             responses += try await fetchSummaryResponses(IMAPSequenceSet(lower...upper), byUID: false, client: client)
-            if upper == range.upperBound { break }
+            if upper >= range.upperBound { break }
             lower = upper + 1
         }
         return try await summaries(from: responses, path: path, uidValidity: uidValidity, client: client)

@@ -155,6 +155,10 @@ final class IMAPMailServiceGmailTests: XCTestCase {
             T.gmailSelect("[Gmail]/Trash", exists: 11, uidNext: 4244),
             .expect("* UID SEARCH RETURN (ALL) UID 4100 UNDELETED", reply: "* ESEARCH (TAG \"{TAG}\") UID ALL 4100\r\n{TAG} OK SEARCH completed (Success)\r\n"),
             .expect("* UID MOVE 4100 INBOX", reply: "{TAG} OK Success\r\n"),
+            // Out of a user label: the Inbox label is added, "Receipts" stays.
+            T.gmailSelect("Receipts", exists: 80, uidNext: 81, uidValidity: 1),
+            .expect("* UID SEARCH RETURN (ALL) UID 60 UNDELETED", reply: "* ESEARCH (TAG \"{TAG}\") UID ALL 60\r\n{TAG} OK SEARCH completed (Success)\r\n"),
+            .expect("* UID COPY 60 INBOX", reply: "{TAG} OK [COPYUID 1 60 35870] (Success)\r\n"),
         ])
         let service = F.service(account, credential: token, transports: IMAPServiceTransportQueue([script]))
         let receipt = MessageSummary(accountID: account.id, mailboxPath: "Receipts", uid: 77, uidValidity: 1, subject: "R", from: [], date: Date())
@@ -163,6 +167,10 @@ final class IMAPMailServiceGmailTests: XCTestCase {
         try await service.perform(.deletePermanently, on: [gmailSummary(35849, gmailID: 1777, messageID: "z@y")])
         try await service.perform(.markSpam, on: [gmailSummary(35851, gmailID: 1778, messageID: "s@y")])
         try await service.perform(.moveToInbox, on: [gmailSummary(4100, path: "[Gmail]/Trash", gmailID: 1779, messageID: "t@y")])
+        try await service.perform(.moveToInbox, on: [gmailSummary(60, path: "Receipts", gmailID: 1780, messageID: "r@y")])
+        XCTAssertTrue(IMAPMailService.copiesToInbox(isGmail: true, from: .all))
+        XCTAssertFalse(IMAPMailService.copiesToInbox(isGmail: true, from: .junk))
+        XCTAssertFalse(IMAPMailService.copiesToInbox(isGmail: false, from: .archive))
     }
 
     func testGmailWithHiddenSystemLabels() async throws {

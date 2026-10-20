@@ -407,26 +407,49 @@ struct IMAPMailServiceMemo: Sendable {
 /// Tracks running `watch` tasks so `disconnect()` can stop them.
 final class IMAPMailServiceWatchRegistry: @unchecked Sendable {
     private let lock = NSLock()
-    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var handles: [UUID: IMAPMailServiceWatchHandle] = [:]
 
-    func add(_ task: Task<Void, Never>) -> UUID {
+    func add(_ handle: IMAPMailServiceWatchHandle) -> UUID {
         let token = UUID()
-        lock.withLock { tasks[token] = task }
+        lock.withLock { handles[token] = handle }
         return token
     }
 
     func remove(_ token: UUID) {
-        _ = lock.withLock { tasks.removeValue(forKey: token) }
+        _ = lock.withLock { handles.removeValue(forKey: token) }
     }
 
     func cancelAll() {
-        let running = lock.withLock { () -> [Task<Void, Never>] in
-            let all = Array(tasks.values)
-            tasks.removeAll()
+        let running = lock.withLock { () -> [IMAPMailServiceWatchHandle] in
+            let all = Array(handles.values)
+            handles.removeAll()
             return all
         }
-        for task in running { task.cancel() }
+        for handle in running { handle.cancel() }
     }
 
-    var count: Int { lock.withLock { tasks.count } }
+    var count: Int { lock.withLock { handles.count } }
+}
+
+/// One watch's task, cancellable before or after it starts.
+final class IMAPMailServiceWatchHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<Void, Never>?
+    private var cancelled = false
+
+    func start(_ task: Task<Void, Never>) {
+        let cancelNow = lock.withLock { () -> Bool in
+            self.task = task
+            return cancelled
+        }
+        if cancelNow { task.cancel() }
+    }
+
+    func cancel() {
+        let running = lock.withLock { () -> Task<Void, Never>? in
+            cancelled = true
+            return task
+        }
+        running?.cancel()
+    }
 }

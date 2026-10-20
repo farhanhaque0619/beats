@@ -66,9 +66,13 @@ jobs:
         run: Ink/scripts/make-dmg.sh
 
       - name: Build iPhone app (unsigned IPA)
+        # Runs even when the Mac build failed, so one CI round reports both platforms' errors.
+        if: success() || failure()
+        id: ios
         run: Ink/scripts/build-ipa.sh
 
       - name: Screenshots
+        if: steps.ios.outcome == 'success'
         continue-on-error: true
         run: Ink/scripts/screenshots.sh
 

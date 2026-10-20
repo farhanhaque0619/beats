@@ -27,6 +27,7 @@ struct InboxScreen: View {
 
     var body: some View {
         let page = InboxPage(scope: store.scope, filter: store.inboxFilter, splitEnabled: store.focusedInboxEnabled)
+        let collapseDistance = Self.collapseDistance
         ScrollViewReader { proxy in
             ZStack(alignment: .top) {
                 ScrollView {
@@ -48,7 +49,7 @@ struct InboxScreen: View {
                     await store.refresh()
                 }
                 .onScrollGeometryChange(for: Bool.self) { geometry in
-                    geometry.contentOffset.y + geometry.contentInsets.top > Self.collapseDistance
+                    geometry.contentOffset.y + geometry.contentInsets.top > collapseDistance
                 } action: { _, collapsed in
                     withAnimation(InkMotion.snappy) { isHeaderCollapsed = collapsed }
                 }

@@ -143,7 +143,7 @@ struct OnboardingServerSettingsCard: View {
     @ViewBuilder private var statusLine: some View {
         switch status {
         case .idle:
-            Text("Server settings. Enter your address and Ink looks them up.")
+            Text("Your mail server settings. Ink looks them up from your address.")
                 .font(.footnote)
                 .foregroundStyle(Ink.secondary)
         case .looking:

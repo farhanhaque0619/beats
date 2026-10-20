@@ -1,0 +1,143 @@
+# XcodeGen spec for Ink. The generated Ink.xcodeproj is committed, so you only need this
+# (and `xcodegen`, or ./scripts/generate-project.sh) when adding targets or changing settings.
+name: Ink
+options:
+  bundleIdPrefix: io.github.farhanhaque0619
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  xcodeVersion: "26.0"
+  groupSortPosition: top
+
+configFiles:
+  Debug: Config/Ink.xcconfig
+  Release: Config/Ink.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_PREVIEWS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+
+packages:
+  InkCore:
+    path: InkCore
+
+targets:
+  Ink-iOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: App
+    dependencies:
+      - package: InkCore
+        product: InkCore
+    info:
+      path: Config/Info-iOS.plist
+      properties:
+        CFBundleDisplayName: Ink
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: en
+        LSRequiresIPhoneOS: true
+        ITSAppUsesNonExemptEncryption: false
+        # Lets SwiftUI animate at up to 120 Hz on ProMotion iPhones.
+        CADisableMinimumFrameDurationOnPhone: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(PRODUCT_BUNDLE_IDENTIFIER).refresh
+        InkGoogleClientID: $(INK_GOOGLE_CLIENT_ID)
+        InkMicrosoftClientID: $(INK_MICROSOFT_CLIENT_ID)
+    settings:
+      base:
+        PRODUCT_NAME: Ink
+        PRODUCT_BUNDLE_IDENTIFIER: $(INK_BUNDLE_ID)
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+
+  Ink-macOS:
+    type: application
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: App
+    dependencies:
+      - package: InkCore
+        product: InkCore
+    info:
+      path: Config/Info-macOS.plist
+      properties:
+        CFBundleDisplayName: Ink
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: en
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.productivity
+        NSHumanReadableCopyright: Made with care. Not affiliated with any mail provider.
+        ITSAppUsesNonExemptEncryption: false
+        InkGoogleClientID: $(INK_GOOGLE_CLIENT_ID)
+        InkMicrosoftClientID: $(INK_MICROSOFT_CLIENT_ID)
+    entitlements:
+      path: Config/Ink-macOS.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.files.downloads.read-write: true
+    settings:
+      base:
+        PRODUCT_NAME: Ink
+        PRODUCT_BUNDLE_IDENTIFIER: $(INK_BUNDLE_ID)
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+
+schemes:
+  Ink-iOS:
+    build:
+      targets:
+        Ink-iOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  Ink-macOS:
+    build:
+      targets:
+        Ink-macOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release

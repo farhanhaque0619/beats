@@ -1,0 +1,535 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0858276C82155A813105B72A /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7031FECE64D9E3C44B0C7D4 /* AppSettings.swift */; };
+		1FD2F30DCD8D54879F133350 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7031FECE64D9E3C44B0C7D4 /* AppSettings.swift */; };
+		208290CEABB73B023E481336 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5A8F361D939841930441A4 /* Theme.swift */; };
+		23B65E3B25358A283E2EC6E6 /* _Placeholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6E492E6880CBBEBA3920605 /* _Placeholder.swift */; };
+		46E13D6CB8D3818046D15C29 /* InkCore in Frameworks */ = {isa = PBXBuildFile; productRef = EF7039B25427FA94BFAEDE90 /* InkCore */; };
+		49D0E0DA1E56FFCF358A9BA5 /* InkCore in Frameworks */ = {isa = PBXBuildFile; productRef = E248E5A05B2986CD1D8AD216 /* InkCore */; };
+		69797CE6D08DD38E5A98BA61 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D81DCB32190D900A135854A0 /* Assets.xcassets */; };
+		8A9E87348A8E7ED357AA567C /* _Placeholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6E492E6880CBBEBA3920605 /* _Placeholder.swift */; };
+		EF25D61127224794CD4776EF /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5A8F361D939841930441A4 /* Theme.swift */; };
+		FB59E30B03F96BFAD9D2D082 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D81DCB32190D900A135854A0 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		00EDCB941A17608AA211FC76 /* Ink-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "Ink-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F5A8F361D939841930441A4 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		3BD8C6933901C22BC7DF5E22 /* Ink.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Ink.xcconfig; sourceTree = "<group>"; };
+		3BEC386B835F2082FDD44107 /* InkCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = InkCore; path = InkCore; sourceTree = SOURCE_ROOT; };
+		C6E492E6880CBBEBA3920605 /* _Placeholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = _Placeholder.swift; sourceTree = "<group>"; };
+		D81DCB32190D900A135854A0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E3817B2F64A9AEEDF2068952 /* Ink-macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Ink-macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F7031FECE64D9E3C44B0C7D4 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		422ACE8D054AB511FA2C0743 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				49D0E0DA1E56FFCF358A9BA5 /* InkCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E078E7EF944FCC34A90CBBA6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				46E13D6CB8D3818046D15C29 /* InkCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		289067E45F3A257562A1C24A /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				3BEC386B835F2082FDD44107 /* InkCore */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		3407A209BB29F61290C33470 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				3BD8C6933901C22BC7DF5E22 /* Ink.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		4568F44A7B15123B4ABAD349 /* Design */ = {
+			isa = PBXGroup;
+			children = (
+				0F5A8F361D939841930441A4 /* Theme.swift */,
+			);
+			path = Design;
+			sourceTree = "<group>";
+		};
+		5EE5A0E05F33286BB7A50303 /* AppShell */ = {
+			isa = PBXGroup;
+			children = (
+				C6E492E6880CBBEBA3920605 /* _Placeholder.swift */,
+				F7031FECE64D9E3C44B0C7D4 /* AppSettings.swift */,
+			);
+			path = AppShell;
+			sourceTree = "<group>";
+		};
+		97E96555378B51B8C143C5E0 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				5EE5A0E05F33286BB7A50303 /* AppShell */,
+				4568F44A7B15123B4ABAD349 /* Design */,
+				C3B22091BA378311ECE007C5 /* Features */,
+				C4711CE3E1523431950709C4 /* Platform */,
+				F6D4896990FF2C20D691E242 /* Resources */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		ABE71FB8084BFAE50B99E763 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				00EDCB941A17608AA211FC76 /* Ink-iOS.app */,
+				E3817B2F64A9AEEDF2068952 /* Ink-macOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C3B22091BA378311ECE007C5 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		C4711CE3E1523431950709C4 /* Platform */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Platform;
+			sourceTree = "<group>";
+		};
+		CFAE848F8D51802F1948B2E7 = {
+			isa = PBXGroup;
+			children = (
+				97E96555378B51B8C143C5E0 /* App */,
+				3407A209BB29F61290C33470 /* Config */,
+				289067E45F3A257562A1C24A /* Packages */,
+				ABE71FB8084BFAE50B99E763 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F6D4896990FF2C20D691E242 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				D81DCB32190D900A135854A0 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		016ADC646F733B094E8D194A /* Ink-iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 33947982D9C8C218E20CFCAE /* Build configuration list for PBXNativeTarget "Ink-iOS" */;
+			buildPhases = (
+				EC443480B2BA23D114B43834 /* Sources */,
+				D82AE2B44C2FE125BC371372 /* Resources */,
+				422ACE8D054AB511FA2C0743 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Ink-iOS";
+			packageProductDependencies = (
+				E248E5A05B2986CD1D8AD216 /* InkCore */,
+			);
+			productName = "Ink-iOS";
+			productReference = 00EDCB941A17608AA211FC76 /* Ink-iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		40F9919F4949B12B67021C99 /* Ink-macOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5645FBC747A27841C6C127EA /* Build configuration list for PBXNativeTarget "Ink-macOS" */;
+			buildPhases = (
+				C85B1291D167A371E99E7368 /* Sources */,
+				12F8BC69DC57C580D86753BE /* Resources */,
+				E078E7EF944FCC34A90CBBA6 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Ink-macOS";
+			packageProductDependencies = (
+				EF7039B25427FA94BFAEDE90 /* InkCore */,
+			);
+			productName = "Ink-macOS";
+			productReference = E3817B2F64A9AEEDF2068952 /* Ink-macOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1AC8DF0946DDDC5284848660 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					016ADC646F733B094E8D194A = {
+						ProvisioningStyle = Automatic;
+					};
+					40F9919F4949B12B67021C99 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 95224DE6E757423E6B5F6CBD /* Build configuration list for PBXProject "Ink" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = CFAE848F8D51802F1948B2E7;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				DF26144BA6E6A24484EC9763 /* XCLocalSwiftPackageReference "InkCore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				016ADC646F733B094E8D194A /* Ink-iOS */,
+				40F9919F4949B12B67021C99 /* Ink-macOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		12F8BC69DC57C580D86753BE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FB59E30B03F96BFAD9D2D082 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D82AE2B44C2FE125BC371372 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				69797CE6D08DD38E5A98BA61 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C85B1291D167A371E99E7368 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1FD2F30DCD8D54879F133350 /* AppSettings.swift in Sources */,
+				208290CEABB73B023E481336 /* Theme.swift in Sources */,
+				8A9E87348A8E7ED357AA567C /* _Placeholder.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EC443480B2BA23D114B43834 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0858276C82155A813105B72A /* AppSettings.swift in Sources */,
+				EF25D61127224794CD4776EF /* Theme.swift in Sources */,
+				23B65E3B25358A283E2EC6E6 /* _Placeholder.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0C28196472A1537A43461A23 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 3BD8C6933901C22BC7DF5E22 /* Ink.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		3C8492E10E9FD3A8D5F58822 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "Config/Info-iOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(INK_BUNDLE_ID)";
+				PRODUCT_NAME = Ink;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		60E5C68871B7BD38A5BB693C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Config/Ink-macOS.entitlements";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = "Config/Info-macOS.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(INK_BUNDLE_ID)";
+				PRODUCT_NAME = Ink;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		B595F06A1FADE5D7C9C5ED17 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Config/Ink-macOS.entitlements";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = "Config/Info-macOS.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(INK_BUNDLE_ID)";
+				PRODUCT_NAME = Ink;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		B5E41BC3AFE0A3721A49C4AF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "Config/Info-iOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(INK_BUNDLE_ID)";
+				PRODUCT_NAME = Ink;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E83DBA05AD53949813AE50F8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 3BD8C6933901C22BC7DF5E22 /* Ink.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		33947982D9C8C218E20CFCAE /* Build configuration list for PBXNativeTarget "Ink-iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3C8492E10E9FD3A8D5F58822 /* Debug */,
+				B5E41BC3AFE0A3721A49C4AF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		5645FBC747A27841C6C127EA /* Build configuration list for PBXNativeTarget "Ink-macOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				60E5C68871B7BD38A5BB693C /* Debug */,
+				B595F06A1FADE5D7C9C5ED17 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		95224DE6E757423E6B5F6CBD /* Build configuration list for PBXProject "Ink" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0C28196472A1537A43461A23 /* Debug */,
+				E83DBA05AD53949813AE50F8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		DF26144BA6E6A24484EC9763 /* XCLocalSwiftPackageReference "InkCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = InkCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E248E5A05B2986CD1D8AD216 /* InkCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkCore;
+		};
+		EF7039B25427FA94BFAEDE90 /* InkCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 1AC8DF0946DDDC5284848660 /* Project object */;
+}

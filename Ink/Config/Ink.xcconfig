@@ -1,0 +1,14 @@
+// Shared build settings for Ink (iPhone and Mac).
+//
+// To run on your own iPhone, set DEVELOPMENT_TEAM in Local.xcconfig (copy
+// Local.xcconfig.example), or pick your team in Xcode > Signing & Capabilities.
+
+INK_BUNDLE_ID = io.github.farhanhaque0619.ink
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+// Optional OAuth client IDs (see docs/ACCOUNTS.md). Empty means "use an app password".
+INK_GOOGLE_CLIENT_ID =
+INK_MICROSOFT_CLIENT_ID =
+
+#include? "Local.xcconfig"

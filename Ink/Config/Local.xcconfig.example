@@ -1,0 +1,12 @@
+// Copy to Local.xcconfig (git-ignored) and fill in.
+
+// Your Apple team ID: Xcode > Settings > Accounts, or developer.apple.com > Membership.
+// A free Apple ID works for running on your own iPhone (apps expire after 7 days).
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Bundle IDs must be unique per team. Change this if Xcode says the ID is taken.
+// INK_BUNDLE_ID = com.yourname.ink
+
+// Optional: Google / Microsoft OAuth client IDs (docs/ACCOUNTS.md).
+// INK_GOOGLE_CLIENT_ID = 1234567890-abc.apps.googleusercontent.com
+// INK_MICROSOFT_CLIENT_ID = 00000000-0000-0000-0000-000000000000

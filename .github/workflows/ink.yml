@@ -1,0 +1,184 @@
+name: Ink
+
+# Builds Ink (the email app in Ink/) for iPhone and Mac on every push that touches it.
+# Publishes a pre-release tagged `ink-latest` with the Mac DMG, an unsigned iPhone IPA and
+# screenshots. It is never marked "latest", so Overdrive's updater (which reads
+# /releases/latest) is unaffected.
+#
+# TestFlight: add the secrets listed in Ink/docs/INSTALL.md, then run this workflow by hand
+# with "Upload to TestFlight" ticked (or push a commit whose message contains [testflight]).
+
+on:
+  push:
+    paths:
+      - "Ink/**"
+      - ".github/workflows/ink.yml"
+  workflow_dispatch:
+    inputs:
+      testflight:
+        description: Upload to TestFlight (needs the App Store Connect secrets)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ink-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-linux:
+    name: InkCore tests (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.2-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift test
+        run: swift test --package-path Ink/InkCore 2>&1 | tail -80
+
+  apple:
+    name: iPhone + Mac builds
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | grep -viE 'beta' | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          xcrun simctl list runtimes | grep -i ios || true
+
+      - name: InkCore tests (macOS)
+        run: swift test --package-path Ink/InkCore 2>&1 | tail -80
+
+      - name: Build Mac app
+        run: Ink/scripts/build-mac.sh
+
+      - name: Package DMG
+        run: Ink/scripts/make-dmg.sh
+
+      - name: Build iPhone app (unsigned IPA)
+        run: Ink/scripts/build-ipa.sh
+
+      - name: Screenshots
+        continue-on-error: true
+        run: Ink/scripts/screenshots.sh
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ink
+          path: |
+            Ink/build/Ink.dmg
+            Ink/build/Ink-unsigned.ipa
+            Ink/build/screenshots/*.png
+          if-no-files-found: warn
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ink-logs
+          path: Ink/build/*.log
+          if-no-files-found: ignore
+
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd Ink
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" build/Ink.app/Contents/Info.plist)
+          TAG="ink-latest"
+          NOTES="Ink $VERSION, built from ${GITHUB_SHA::7} on \`${GITHUB_REF_NAME}\`.
+
+          **Mac:** download **Ink.dmg**, open it, drag Ink into Applications. The first launch is blocked because the app isn't notarized: open System Settings › Privacy & Security and click **Open Anyway** (or run \`xattr -dr com.apple.quarantine /Applications/Ink.app\`).
+
+          **iPhone:** see [Ink/docs/INSTALL.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/Ink/docs/INSTALL.md). \`Ink-unsigned.ipa\` is for sideloading tools that re-sign with your Apple ID.
+
+          Screenshots below are captured from the iOS Simulator on every build."
+          gh release delete "$TAG" --cleanup-tag --yes 2>/dev/null || true
+          shopt -s nullglob
+          gh release create "$TAG" build/Ink.dmg build/Ink-unsigned.ipa build/screenshots/*.png \
+            --target "$GITHUB_SHA" \
+            --title "Ink $VERSION (preview)" \
+            --notes "$NOTES" \
+            --prerelease \
+            --latest=false
+
+  testflight:
+    name: TestFlight
+    needs: apple
+    if: (github.event_name == 'workflow_dispatch' && inputs.testflight) || contains(github.event.head_commit.message, '[testflight]')
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      BUNDLE_ID: ${{ secrets.INK_BUNDLE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        run: |
+          missing=""
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8 TEAM_ID; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing secrets:$missing. See Ink/docs/INSTALL.md (TestFlight)."
+            exit 1
+          fi
+
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | grep -viE 'beta' | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+
+      - name: Archive and upload
+        run: |
+          cd Ink
+          mkdir -p build ~/.appstoreconnect/private_keys
+          KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          printf '%s' "$ASC_KEY_P8" > "$KEY_PATH"
+          EXTRA=()
+          if [ -n "$BUNDLE_ID" ]; then EXTRA+=("INK_BUNDLE_ID=$BUNDLE_ID"); fi
+          AUTH=(-allowProvisioningUpdates
+                -authenticationKeyPath "$KEY_PATH"
+                -authenticationKeyID "$ASC_KEY_ID"
+                -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+
+          xcodebuild archive \
+            -project Ink.xcodeproj -scheme Ink-iOS -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Ink-iOS.xcarchive \
+            DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
+            "${EXTRA[@]}" "${AUTH[@]}"
+
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>testFlightInternalTestingOnly</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath build/Ink-iOS.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/export \
+            "${AUTH[@]}"
+          echo "Uploaded build ${GITHUB_RUN_NUMBER} to App Store Connect. It appears in TestFlight after processing (5-30 min)."

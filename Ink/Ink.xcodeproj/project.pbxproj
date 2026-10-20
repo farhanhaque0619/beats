@@ -7,28 +7,34 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0858276C82155A813105B72A /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7031FECE64D9E3C44B0C7D4 /* AppSettings.swift */; };
-		1FD2F30DCD8D54879F133350 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7031FECE64D9E3C44B0C7D4 /* AppSettings.swift */; };
-		208290CEABB73B023E481336 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5A8F361D939841930441A4 /* Theme.swift */; };
-		23B65E3B25358A283E2EC6E6 /* _Placeholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6E492E6880CBBEBA3920605 /* _Placeholder.swift */; };
 		46E13D6CB8D3818046D15C29 /* InkCore in Frameworks */ = {isa = PBXBuildFile; productRef = EF7039B25427FA94BFAEDE90 /* InkCore */; };
+		4870690180B7457BF0174363 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B0AF8E81E5247AA78A8D9A89 /* PrivacyInfo.xcprivacy */; };
 		49D0E0DA1E56FFCF358A9BA5 /* InkCore in Frameworks */ = {isa = PBXBuildFile; productRef = E248E5A05B2986CD1D8AD216 /* InkCore */; };
-		69797CE6D08DD38E5A98BA61 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D81DCB32190D900A135854A0 /* Assets.xcassets */; };
-		8A9E87348A8E7ED357AA567C /* _Placeholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6E492E6880CBBEBA3920605 /* _Placeholder.swift */; };
-		EF25D61127224794CD4776EF /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5A8F361D939841930441A4 /* Theme.swift */; };
-		FB59E30B03F96BFAD9D2D082 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D81DCB32190D900A135854A0 /* Assets.xcassets */; };
+		4FCCF5096CBD7AE8A3771DF7 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B0AF8E81E5247AA78A8D9A89 /* PrivacyInfo.xcprivacy */; };
+		6B49208CB27CF06E85B2DDBE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8D3C78544D29FEF78762B069 /* Assets.xcassets */; };
+		78AA53E759121F9D6FD86059 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8D3C78544D29FEF78762B069 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		00EDCB941A17608AA211FC76 /* Ink-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "Ink-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		0F5A8F361D939841930441A4 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		3BD8C6933901C22BC7DF5E22 /* Ink.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Ink.xcconfig; sourceTree = "<group>"; };
 		3BEC386B835F2082FDD44107 /* InkCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = InkCore; path = InkCore; sourceTree = SOURCE_ROOT; };
-		C6E492E6880CBBEBA3920605 /* _Placeholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = _Placeholder.swift; sourceTree = "<group>"; };
-		D81DCB32190D900A135854A0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		8D3C78544D29FEF78762B069 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B0AF8E81E5247AA78A8D9A89 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		E3817B2F64A9AEEDF2068952 /* Ink-macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Ink-macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		F7031FECE64D9E3C44B0C7D4 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		25F60431880F5644DBB9F4EE /* App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		422ACE8D054AB511FA2C0743 /* Frameworks */ = {
@@ -66,35 +72,6 @@
 			path = Config;
 			sourceTree = "<group>";
 		};
-		4568F44A7B15123B4ABAD349 /* Design */ = {
-			isa = PBXGroup;
-			children = (
-				0F5A8F361D939841930441A4 /* Theme.swift */,
-			);
-			path = Design;
-			sourceTree = "<group>";
-		};
-		5EE5A0E05F33286BB7A50303 /* AppShell */ = {
-			isa = PBXGroup;
-			children = (
-				C6E492E6880CBBEBA3920605 /* _Placeholder.swift */,
-				F7031FECE64D9E3C44B0C7D4 /* AppSettings.swift */,
-			);
-			path = AppShell;
-			sourceTree = "<group>";
-		};
-		97E96555378B51B8C143C5E0 /* App */ = {
-			isa = PBXGroup;
-			children = (
-				5EE5A0E05F33286BB7A50303 /* AppShell */,
-				4568F44A7B15123B4ABAD349 /* Design */,
-				C3B22091BA378311ECE007C5 /* Features */,
-				C4711CE3E1523431950709C4 /* Platform */,
-				F6D4896990FF2C20D691E242 /* Resources */,
-			);
-			path = App;
-			sourceTree = "<group>";
-		};
 		ABE71FB8084BFAE50B99E763 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -104,34 +81,23 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		C3B22091BA378311ECE007C5 /* Features */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Features;
-			sourceTree = "<group>";
-		};
-		C4711CE3E1523431950709C4 /* Platform */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Platform;
-			sourceTree = "<group>";
-		};
 		CFAE848F8D51802F1948B2E7 = {
 			isa = PBXGroup;
 			children = (
-				97E96555378B51B8C143C5E0 /* App */,
 				3407A209BB29F61290C33470 /* Config */,
 				289067E45F3A257562A1C24A /* Packages */,
+				E46B94F2862DBFA69D98AC4B /* Resources */,
+				25F60431880F5644DBB9F4EE /* App */,
+				25F60431880F5644DBB9F4EE /* App */,
 				ABE71FB8084BFAE50B99E763 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		F6D4896990FF2C20D691E242 /* Resources */ = {
+		E46B94F2862DBFA69D98AC4B /* Resources */ = {
 			isa = PBXGroup;
 			children = (
-				D81DCB32190D900A135854A0 /* Assets.xcassets */,
+				8D3C78544D29FEF78762B069 /* Assets.xcassets */,
+				B0AF8E81E5247AA78A8D9A89 /* PrivacyInfo.xcprivacy */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -150,6 +116,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				25F60431880F5644DBB9F4EE /* App */,
 			);
 			name = "Ink-iOS";
 			packageProductDependencies = (
@@ -170,6 +139,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				25F60431880F5644DBB9F4EE /* App */,
 			);
 			name = "Ink-macOS";
 			packageProductDependencies = (
@@ -224,7 +196,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				FB59E30B03F96BFAD9D2D082 /* Assets.xcassets in Resources */,
+				6B49208CB27CF06E85B2DDBE /* Assets.xcassets in Resources */,
+				4FCCF5096CBD7AE8A3771DF7 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -232,7 +205,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				69797CE6D08DD38E5A98BA61 /* Assets.xcassets in Resources */,
+				78AA53E759121F9D6FD86059 /* Assets.xcassets in Resources */,
+				4870690180B7457BF0174363 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -243,9 +217,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1FD2F30DCD8D54879F133350 /* AppSettings.swift in Sources */,
-				208290CEABB73B023E481336 /* Theme.swift in Sources */,
-				8A9E87348A8E7ED357AA567C /* _Placeholder.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -253,9 +224,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0858276C82155A813105B72A /* AppSettings.swift in Sources */,
-				EF25D61127224794CD4776EF /* Theme.swift in Sources */,
-				23B65E3B25358A283E2EC6E6 /* _Placeholder.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

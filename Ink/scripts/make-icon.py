@@ -11,7 +11,7 @@ import os
 from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-ASSETS = os.path.join(ROOT, "App", "Resources", "Assets.xcassets")
+ASSETS = os.path.join(ROOT, "Resources", "Assets.xcassets")
 SS = 4  # supersampling factor
 
 BLUE = (77, 132, 255)

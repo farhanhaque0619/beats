@@ -41,7 +41,10 @@ targets:
     platform: iOS
     deploymentTarget: "18.0"
     sources:
+      # Synchronized folder: every file under App/ is picked up without regenerating.
       - path: App
+        type: syncedFolder
+      - path: Resources
     dependencies:
       - package: InkCore
         product: InkCore
@@ -91,7 +94,10 @@ targets:
     platform: macOS
     deploymentTarget: "15.0"
     sources:
+      # Synchronized folder: every file under App/ is picked up without regenerating.
       - path: App
+        type: syncedFolder
+      - path: Resources
     dependencies:
       - package: InkCore
         product: InkCore

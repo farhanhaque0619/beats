@@ -238,7 +238,7 @@ struct HTMLScanner {
 extension HTMLAttribute {
     /// Whitespace-separated class names, lowercased.
     var classNames: [String] {
-        value.asciiLowercased.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" }).map(String.init)
+        value.asciiLowercased.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" || $0 == "\r\n" }).map(String.init)
     }
 }
 

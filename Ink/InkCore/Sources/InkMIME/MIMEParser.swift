@@ -285,8 +285,9 @@ public struct ParsedMessage: Sendable {
     }
 
     static func singleLine(_ s: String) -> String {
-        guard s.contains(where: { $0 == "\r" || $0 == "\n" || $0 == "\t" }) else { return s }
-        return s.split(whereSeparator: { $0 == "\r" || $0 == "\n" || $0 == "\t" }).joined(separator: " ")
+        // "\r\n" is a single Character, so it needs its own comparison.
+        guard s.contains(where: { $0 == "\r\n" || $0 == "\r" || $0 == "\n" || $0 == "\t" }) else { return s }
+        return s.split(whereSeparator: { $0 == "\r\n" || $0 == "\r" || $0 == "\n" || $0 == "\t" }).joined(separator: " ")
     }
 
     static func receivedDate(_ headers: MIMEHeaders) -> Date? {

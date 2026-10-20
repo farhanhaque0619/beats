@@ -155,8 +155,12 @@ extension String {
     }
 
     /// Converts CRLF and lone CR line endings to LF.
+    ///
+    /// Checks the UTF-8 bytes: Swift treats "\r\n" as one Character, so a Character-level
+    /// `contains("\r")` misses CRLF line endings (and which overload wins differs between Apple
+    /// platforms and Linux).
     var normalizedNewlines: String {
-        guard contains("\r") else { return self }
+        guard utf8.contains(0x0D) else { return self }
         return replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
     }
 

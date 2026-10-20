@@ -194,7 +194,7 @@ enum BodySelector {
         var out = ""
         for segment in segments {
             guard let text = segment.plain ?? segment.html.map(HTMLText.toPlainText), !text.isEmpty else { continue }
-            if !out.isEmpty && !out.hasSuffix("\n") { out += "\n" }
+            if !out.isEmpty && out.utf8.last != 0x0A { out += "\n" }
             out += text
         }
         return out

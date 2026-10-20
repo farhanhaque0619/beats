@@ -56,8 +56,10 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
             return old
         }
         Self.tearDown(task: previous.0, session: previous.1)
-        task.resume()
+        // Implicit TLS: queue the handshake before resume() and before any I/O, so not a single
+        // byte goes out in the clear (the pattern from Apple's TCPTransports sample).
         if tls { task.startSecureConnection() }
+        task.resume()
     }
 
     func startTLS() async throws {
@@ -144,6 +146,8 @@ final class URLSessionMailTransport: MailTransport, @unchecked Sendable {
         configuration.httpCookieAcceptPolicy = .never
         configuration.urlCredentialStorage = nil
         configuration.waitsForConnectivity = false
+        // No TLS 1.0/1.1, ever (GMX and others refuse them anyway).
+        configuration.tlsMinimumSupportedProtocolVersion = .TLSv12
         // IDLE connections stay quiet for many minutes; every read and write passes its own timeout.
         configuration.timeoutIntervalForRequest = 60 * 60
         return configuration

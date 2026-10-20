@@ -99,7 +99,7 @@ struct ConversationRow: View, Equatable {
             if unread && !onHighlight {
                 UnreadDot()
                     .padding(.leading, 7)
-                    .padding(.top, (style.compact ? InkSpace.rowVerticalCompact : InkSpace.rowVertical) + (style.showAvatar ? (style.compact ? 10 : 16) : 7))
+                    .padding(.top, unreadDotTop)
                     .transition(.scale.combined(with: .opacity))
             }
         }
@@ -135,6 +135,18 @@ struct ConversationRow: View, Equatable {
             }
         }
         .fixedSize()
+    }
+
+    /// Lines the unread dot up with the sender line (beside the avatar's centre when shown).
+    private var unreadDotTop: CGFloat {
+        let rowPadding: CGFloat = style.compact ? InkSpace.rowVerticalCompact : InkSpace.rowVertical
+        let lineOffset: CGFloat
+        if style.showAvatar {
+            lineOffset = style.compact ? 10 : 16
+        } else {
+            lineOffset = 7
+        }
+        return rowPadding + lineOffset
     }
 
     /// The person whose avatar represents the row: the latest sender who isn't you (or the

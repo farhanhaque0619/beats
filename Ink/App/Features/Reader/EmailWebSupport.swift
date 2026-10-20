@@ -50,6 +50,7 @@ struct EmailRenderKey: Hashable, Sendable {
     }
 
     /// Body text size in CSS pixels, following Dynamic Type on iPhone.
+    @MainActor
     private static func fontSize(for environment: EnvironmentValues) -> Int {
         #if os(macOS)
         return 14

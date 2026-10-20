@@ -8,6 +8,8 @@ struct RootView: View {
     var body: some View {
         @Bindable var app = app
         let accent = app.settings.accent.color
+        let composeDraft: Binding<OutgoingMessage?> = searchHostsSheets ? .constant(nil) : $app.composeDraft
+        let isSnoozePickerPresented: Binding<Bool> = searchHostsSheets ? .constant(false) : $app.isSnoozePickerPresented
         Group {
             if showsWelcome {
                 WelcomeFlow()
@@ -72,24 +74,6 @@ struct RootView: View {
         #else
         return false
         #endif
-    }
-
-    private var composeDraft: Binding<OutgoingMessage?> {
-        Binding(
-            get: { searchHostsSheets ? nil : app.composeDraft },
-            set: { draft in
-                if !searchHostsSheets { app.composeDraft = draft }
-            }
-        )
-    }
-
-    private var isSnoozePickerPresented: Binding<Bool> {
-        Binding(
-            get: { app.isSnoozePickerPresented && !searchHostsSheets },
-            set: { isPresented in
-                if !searchHostsSheets { app.isSnoozePickerPresented = isPresented }
-            }
-        )
     }
 
     @ViewBuilder private var main: some View {

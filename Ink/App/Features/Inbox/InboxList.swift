@@ -96,14 +96,23 @@ struct InboxList: View {
         let items = InboxListItem.build(from: conversations)
         let ids = conversations.map(\.id)
         let loadMoreTriggers = Set(ids.suffix(5))
+        let accounts = store.accounts
+        var accountColors: [String: Int] = [:]
+        for account in accounts where accountColors[account.id] == nil {
+            accountColors[account.id] = account.colorIndex
+        }
+        let myAddresses = Set(accounts.map { $0.emailAddress.lowercased() })
+        let avatarColumn: CGFloat = style.compact ? InkSize.avatarSmall : InkSize.avatar
+        let separatorInset: CGFloat = style.showAvatar ? InkSpace.gutter + avatarColumn + InkSpace.m : InkSpace.gutter
+        let screenshotRowID: String? = app.screenshot == .swipe ? conversations.first?.id : nil
         let context = InboxRowContext(
             style: style,
             swipes: settings.swipes,
-            accountColors: Dictionary(store.accounts.map { ($0.id, $0.colorIndex) }, uniquingKeysWith: { first, _ in first }),
-            myAddresses: Set(store.accounts.map { $0.emailAddress.lowercased() }),
-            separatorInset: InkSpace.gutter + (style.showAvatar ? (style.compact ? InkSize.avatarSmall : InkSize.avatar) + InkSpace.m : 0),
+            accountColors: accountColors,
+            myAddresses: myAddresses,
+            separatorInset: separatorInset,
             showsSnoozeTime: scope.role == .snoozed,
-            screenshotRowID: app.screenshot == .swipe ? conversations.first?.id : nil
+            screenshotRowID: screenshotRowID
         )
         return LazyVStack(spacing: 0, pinnedViews: []) {
             ForEach(items) { item in

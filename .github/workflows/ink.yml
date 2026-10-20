@@ -93,6 +93,10 @@ jobs:
       - name: Publish pre-release
         env:
           GH_TOKEN: ${{ github.token }}
+          # The workflow token may not create a tag on a commit that adds workflow files
+          # (this branch adds ink.yml), so the release tag sits on the default branch and the
+          # notes name the commit the build came from.
+          TAG_TARGET: ${{ github.event.repository.default_branch }}
         run: |
           cd Ink
           VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" build/Ink.app/Contents/Info.plist)
@@ -107,7 +111,7 @@ jobs:
           gh release delete "$TAG" --cleanup-tag --yes 2>/dev/null || true
           shopt -s nullglob
           gh release create "$TAG" build/Ink.dmg build/Ink-unsigned.ipa build/screenshots/*.png \
-            --target "$GITHUB_SHA" \
+            --target "$TAG_TARGET" \
             --title "Ink $VERSION (preview)" \
             --notes "$NOTES" \
             --prerelease \

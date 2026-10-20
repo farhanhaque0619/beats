@@ -22,10 +22,11 @@ struct OnboardingServerFields: Equatable {
     var security: ConnectionSecurity
     var username: String
 
+    /// A plain-text server becomes STARTTLS: Ink never sends a password unencrypted.
     init(host: String = "", port: Int, security: ConnectionSecurity = .tls, username: String = "") {
         self.host = host
         self.port = String(port)
-        self.security = security == .none ? .tls : security
+        self.security = security == ConnectionSecurity.none ? .startTLS : security
         self.username = username
     }
 
@@ -42,7 +43,7 @@ struct OnboardingServerFields: Equatable {
         return ServerConfig(
             host: trimmedHost,
             port: number,
-            security: security == .none ? .tls : security,
+            security: security == ConnectionSecurity.none ? .startTLS : security,
             username: trimmedUser.isEmpty ? fallbackUsername : trimmedUser
         )
     }

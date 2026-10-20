@@ -11,8 +11,21 @@ struct ReaderActions {
     /// Called right before the conversation leaves the store, so the screen can keep drawing
     /// it while it goes away.
     let willLeave: () -> Void
+    /// Takes the screen away once the conversation has left. `wasFocused` is true when this is
+    /// the thread the app navigated to (top of the iPhone stack, the Mac selection) and false
+    /// when it was pushed somewhere else, such as search results.
+    let leave: (_ wasFocused: Bool) -> Void
     /// Called right before the snooze picker opens for this conversation.
-    let willSnooze: () -> Void
+    let willSnooze: (_ wasFocused: Bool) -> Void
+
+    /// Whether this thread is the one `AppModel` navigation points at.
+    var isFocused: Bool {
+        #if os(iOS)
+        return app.phonePath.last == conversation.id
+        #else
+        return app.selection.contains(conversation.id)
+        #endif
+    }
 
     var isFlagged: Bool { conversation.isFlagged }
     var snoozedUntil: Date? { store.snoozeDate(for: conversation) }
@@ -48,7 +61,7 @@ struct ReaderActions {
 
     func snooze() {
         Haptics.tick()
-        willSnooze()
+        willSnooze(isFocused)
         app.perform(.snooze, on: [conversation])
     }
 
@@ -62,8 +75,10 @@ struct ReaderActions {
         Haptics.tick()
         store.setRead(false, [conversation])
         #if os(iOS)
-        if app.phonePath.last == conversation.id {
+        if isFocused {
             app.phonePath.removeLast()
+        } else {
+            leave(false)
         }
         #endif
     }
@@ -92,19 +107,21 @@ struct ReaderActions {
     // MARK: Helpers
 
     private func remove(_ action: SwipeAction) {
+        let wasFocused = isFocused
         Haptics.success()
         willLeave()
         app.perform(action, on: [conversation])
-        app.didRemoveFocusedConversation(conversation.id)
+        leave(wasFocused)
     }
 
     /// Moves that go straight to the store rather than through a swipe action: leave the screen
     /// the same way, and on Mac select a neighbour so the detail column doesn't go blank.
     private func relocate(_ change: () -> Void) {
+        let wasFocused = isFocused
         Haptics.success()
         willLeave()
         #if os(macOS)
-        if app.selection.contains(conversation.id) {
+        if wasFocused {
             if let neighbour = app.conversation(after: conversation.id, offset: 1) ?? app.conversation(after: conversation.id, offset: -1),
                neighbour.id != conversation.id {
                 app.selection = [neighbour.id]
@@ -114,11 +131,11 @@ struct ReaderActions {
         }
         #endif
         change()
-        app.didRemoveFocusedConversation(conversation.id)
+        leave(wasFocused)
     }
 
     private func path(for role: MailboxRole) -> String? {
-        store.mailboxes(for: conversation.accountID).first { $0.role == role }?.path
+        store.mailboxes(for: conversation.accountID).first(where: { $0.role == role })?.path
     }
 }
 
@@ -262,10 +279,7 @@ struct ReaderToolbar: ToolbarContent {
                 Label("Move to Trash", systemImage: "trash")
             }
             .help("Move to Trash")
-            Button { actions.snooze() } label: {
-                Label("Snooze", systemImage: "clock")
-            }
-            .help("Snooze")
+            ReaderMacSnoozeButton(conversation: actions.conversation)
             starButton
             Menu {
                 Button { actions.reply(.replyAll) } label: {
@@ -303,3 +317,43 @@ struct ReaderToolbar: ToolbarContent {
         .help("More")
     }
 }
+
+#if os(macOS)
+/// Snooze from the Mac toolbar: the picker opens in a popover anchored to the button, like the
+/// list column's toolbar does for a selection.
+private struct ReaderMacSnoozeButton: View {
+    let conversation: Conversation
+
+    @Environment(AppModel.self) private var app
+    @Environment(MailStore.self) private var store
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.inkAccent) private var accent
+    @State private var isPresented = false
+
+    var body: some View {
+        Button {
+            Haptics.tick()
+            app.snoozeTargets = [conversation]
+            isPresented = true
+        } label: {
+            Label("Snooze", systemImage: "clock")
+        }
+        .help("Snooze")
+        .popover(isPresented: $isPresented) {
+            SnoozePicker(conversations: [conversation])
+                .environment(app)
+                .environment(store)
+                .environment(settings)
+                .environment(\.inkAccent, accent)
+                .tint(accent)
+        }
+        .onChange(of: app.snoozeTargets.isEmpty) { _, isEmpty in
+            if isEmpty { isPresented = false }
+        }
+        .onChange(of: isPresented) { _, presented in
+            // Closed by clicking outside: forget the target (unless the sheet took over).
+            if !presented && !app.isSnoozePickerPresented { app.snoozeTargets = [] }
+        }
+    }
+}
+#endif

@@ -164,8 +164,9 @@ struct OnboardingAccountForm: View {
                     pageButtonTitle: provider.pageButtonTitle
                 )
             }
-            identityFields(includesPassword: false)
-            if !auth.isOAuthAvailable, let oauth = auth.oauth {
+            if auth.isOAuthAvailable {
+                identityFields(includesPassword: false)
+            } else if let oauth = auth.oauth {
                 OnboardingOAuthUnavailableCard(provider: oauth)
             }
         }

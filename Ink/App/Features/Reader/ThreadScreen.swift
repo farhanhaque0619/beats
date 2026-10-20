@@ -20,11 +20,13 @@ private struct ReaderThreadView: View {
     @Environment(AppModel.self) private var app
     @Environment(MailStore.self) private var store
     @Environment(AppSettings.self) private var settings
+    @Environment(\.dismiss) private var dismiss
 
     /// The conversation as it was when an action took it out of the store, drawn while the
     /// screen goes away instead of flashing an empty state.
     @State private var departing: Conversation?
     @State private var awaitingSnooze = false
+    @State private var snoozeWasFocused = false
     @State private var expandedIDs: Set<String> = []
     @State private var didSeedExpansion = false
     @State private var revealsAllEarlier = false
@@ -213,7 +215,7 @@ private struct ReaderThreadView: View {
         guard awaitingSnooze else { return }
         awaitingSnooze = false
         if let snapshot = departing, store.snoozeDate(for: snapshot) != nil {
-            app.didRemoveFocusedConversation(snapshot.id)
+            leave(snapshot.id, wasFocused: snoozeWasFocused)
         } else {
             departing = nil
         }
@@ -225,11 +227,23 @@ private struct ReaderThreadView: View {
             app: app,
             store: store,
             willLeave: { departing = conversation },
-            willSnooze: {
+            leave: { wasFocused in leave(conversation.id, wasFocused: wasFocused) },
+            willSnooze: { wasFocused in
                 departing = conversation
                 awaitingSnooze = true
+                snoozeWasFocused = wasFocused
             }
         )
+    }
+
+    /// Back to the list (or on to the next conversation, per settings) when this is the thread
+    /// the app navigated to; otherwise pop whichever stack pushed it (search results).
+    private func leave(_ conversationID: String, wasFocused: Bool) {
+        if wasFocused {
+            app.didRemoveFocusedConversation(conversationID)
+        } else {
+            dismiss()
+        }
     }
 }
 

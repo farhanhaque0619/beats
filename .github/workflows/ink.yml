@@ -35,7 +35,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: swift test
-        run: swift test --package-path Ink/InkCore 2>&1 | tail -80
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test --package-path Ink/InkCore 2>&1 | tee core-tests.log | tail -40 || {
+            echo "----- failures -----"; grep -E "error: |failed \(" core-tests.log | head -120; exit 1; }
 
   apple:
     name: iPhone + Mac builds
@@ -57,12 +61,20 @@ jobs:
           xcrun simctl list runtimes | grep -i ios || true
 
       - name: InkCore tests (macOS)
-        run: swift test --package-path Ink/InkCore 2>&1 | tail -80
+        # Apple's Foundation differs from Linux's in places (charsets, dates), so the core is tested on both.
+        run: |
+          set -o pipefail
+          mkdir -p Ink/build
+          swift test --package-path Ink/InkCore 2>&1 | tee Ink/build/core-tests-macos.log | tail -40 || {
+            echo "----- failures -----"; grep -E "error: |failed \(" Ink/build/core-tests-macos.log | head -120; exit 1; }
 
       - name: Build Mac app
+        if: success() || failure()
+        id: mac
         run: Ink/scripts/build-mac.sh
 
       - name: Package DMG
+        if: steps.mac.outcome == 'success'
         run: Ink/scripts/make-dmg.sh
 
       - name: Build iPhone app (unsigned IPA)

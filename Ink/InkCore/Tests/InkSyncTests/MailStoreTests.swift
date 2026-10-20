@@ -1123,6 +1123,72 @@ final class MailStoreTests: XCTestCase {
         XCTAssertTrue(store.conversations.contains { $0.id == first.id })
         XCTAssertFalse(store.contactSuggestions(matching: "").isEmpty)
     }
+
+    /// The app's screenshot mode builds the store with `preview()` on launch and immediately
+    /// picks a long thread, replies to it, searches "flight" and opens the Other pill.
+    func testPreviewHasEverythingTheScreenshotsShow() async throws {
+        let started = Date()
+        let store = MailStore.preview()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "preview() must not block launch")
+        XCTAssertEqual(store.scope, .allInboxes)
+        XCTAssertEqual(store.inboxFilter, .focused)
+
+        // Focus: long threads, read and unread mail, a star, attachments.
+        let focus = store.conversations
+        XCTAssertGreaterThanOrEqual(focus.count, 10)
+        let thread = try XCTUnwrap(focus.first { $0.count >= 3 }, "a thread with 3+ messages for the thread screenshot")
+        XCTAssertGreaterThan(Set(thread.messages.compactMap { $0.sender?.normalized }).count, 1, "more than one person on the thread")
+        XCTAssertTrue(focus.contains { $0.isUnread })
+        XCTAssertTrue(focus.contains { !$0.isUnread })
+        XCTAssertTrue(focus.contains { $0.isFlagged }, "a starred conversation")
+        XCTAssertFalse(focus.contains { $0.isBulk }, "bulk mail stays in Other")
+        XCTAssertEqual(focus.map(\.date), focus.map(\.date).sorted(by: >), "newest first")
+        let withFiles = try XCTUnwrap(focus.first { $0.hasAttachments })
+        let fileMessage = try XCTUnwrap(withFiles.messages.last { $0.hasAttachments })
+        let fileBody = try XCTUnwrap(store.cachedBody(for: fileMessage))
+        XCTAssertFalse(fileBody.visibleAttachments.isEmpty)
+        XCTAssertTrue(fileBody.visibleAttachments.allSatisfy { ($0.data?.count ?? 0) > 0 }, "attachments open without a network")
+
+        // Every message in the thread reads straight from memory.
+        for message in thread.messages {
+            let body = try XCTUnwrap(store.cachedBody(for: message), message.subject)
+            XCTAssertTrue((body.plainText ?? body.html ?? "").count > 20, message.subject)
+        }
+        let latest = try XCTUnwrap(thread.latest)
+        let draft = store.draft(replyingTo: latest, mode: .reply, body: store.cachedBody(for: latest))
+        XCTAssertTrue(draft.subject.hasPrefix("Re: "), draft.subject)
+        XCTAssertFalse(draft.to.isEmpty)
+        XCTAssertNotNil(draft.inReplyTo)
+
+        // Other: newsletters and notifications.
+        XCTAssertGreaterThan(store.otherCount, 0)
+        XCTAssertGreaterThan(store.otherUnreadCount, 0)
+        store.inboxFilter = .other
+        XCTAssertEqual(store.conversations.count, store.otherCount)
+        XCTAssertTrue(store.conversations.allSatisfy(\.isBulk))
+        store.inboxFilter = .focused
+
+        // The other folders are filled too.
+        let roles = Set(store.mailboxes(for: AccountConfig.demo.id).map(\.role))
+        XCTAssertTrue(roles.isSuperset(of: [.inbox, .sent, .archive, .trash, .junk, .drafts]), "\(roles)")
+        for role in [MailboxRole.sent, .archive, .junk] {
+            store.scope = .unified(role)
+            XCTAssertFalse(store.conversations.isEmpty, "\(role)")
+        }
+        store.scope = .allInboxes
+        XCTAssertGreaterThan(store.unreadCount(for: .allInboxes), 0)
+
+        // Search screenshot: "flight" finds something locally and on the demo "server".
+        XCTAssertFalse(store.searchLocal("flight").isEmpty)
+        let server = try await store.searchServer("flight")
+        XCTAssertFalse(server.isEmpty)
+
+        // Nothing is running in the background and nothing touched the disk.
+        await store.waitUntilIdle()
+        XCTAssertEqual(store.syncStatus, .idle)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.environment.storageDirectory
+            .appendingPathComponent("accounts.json").path))
+    }
 }
 
 @MainActor

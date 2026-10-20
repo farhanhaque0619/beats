@@ -14,6 +14,8 @@ extension MailStore {
     static let contextStaleInterval: TimeInterval = 5 * 60
     /// The folder list is re-read at most this often.
     static let mailboxListInterval: TimeInterval = 15 * 60
+    /// A manual refresh of a scope whose folder is missing re-reads the list at most this often.
+    static let missingFolderListInterval: TimeInterval = 30
 
     // MARK: Keys and lookups
 
@@ -84,14 +86,23 @@ extension MailStore {
     }
 
     /// Reads the folder list when there is none yet, when it wasn't read this session, or when it
-    /// is older than `mailboxListInterval` (always with `force`).
+    /// is older than `mailboxListInterval` (always with `force`). With `force`, a read already
+    /// running is waited for and then another one starts: it may predate a folder just created.
     func ensureMailboxes(accountID: String, force: Bool = false) async throws {
         let now = environment.now()
         let haveList = !(mailboxesByAccount[accountID] ?? []).isEmpty
         if !force, haveList, let last = lastMailboxListFetch[accountID], now.timeIntervalSince(last) < Self.mailboxListInterval { return }
         if let running = mailboxListTasks[accountID] {
-            try await running.value
-            return
+            guard force else {
+                try await running.value
+                return
+            }
+            _ = try? await running.value
+            // One that started after this call began is fresh enough.
+            if let again = mailboxListTasks[accountID], again != running {
+                try await again.value
+                return
+            }
         }
         guard let service = services[accountID] else { throw MailError.connectionFailed("That account is no longer set up.") }
         let task = Task<Void, Error> { @MainActor in
@@ -110,6 +121,33 @@ extension MailStore {
             if haveList { return }
             throw error
         }
+    }
+
+    /// True when the account's folder list has no folder for where `action` puts messages. The
+    /// service creates Archive, Trash or Junk on servers that have none, so after such an action
+    /// the list is out of date.
+    func destinationIsMissing(_ action: MailAction, accountID: String) -> Bool {
+        guard !(mailboxesByAccount[accountID] ?? []).isEmpty else { return false }
+        switch action {
+        case .archive: return mailbox(accountID: accountID, role: .archive) == nil && mailbox(accountID: accountID, role: .all) == nil
+        case .trash: return mailbox(accountID: accountID, role: .trash) == nil
+        case .markSpam: return mailbox(accountID: accountID, role: .junk) == nil
+        default: return false
+        }
+    }
+
+    /// True when `scope` is a well-known folder this account's list doesn't have (yet): Archive
+    /// before the first archive created it, or one made in another app since the last read.
+    func scopeIsMissingFolder(_ scope: MailScope, accountID: String) -> Bool {
+        guard case let role? = scope.role, role != .snoozed, role != .custom,
+              !(mailboxesByAccount[accountID] ?? []).isEmpty else { return false }
+        return plan(for: scope, accountID: accountID) == nil
+    }
+
+    /// Re-reads the folder list when it was read longer ago than `interval` (or never).
+    func refreshMailboxList(accountID: String, ifOlderThan interval: TimeInterval) async throws {
+        if let last = lastMailboxListFetch[accountID], environment.now().timeIntervalSince(last) < interval { return }
+        try await ensureMailboxes(accountID: accountID, force: true)
     }
 
     // MARK: Sync
@@ -265,6 +303,9 @@ extension MailStore {
                 group.addTask { @MainActor in
                     do {
                         try await self.ensureMailboxes(accountID: accountID)
+                        if !onlyIfStale, self.scopeIsMissingFolder(scope, accountID: accountID) {
+                            try await self.refreshMailboxList(accountID: accountID, ifOlderThan: Self.missingFolderListInterval)
+                        }
                         for mailbox in self.syncTargets(for: scope, accountID: accountID, onlyIfStale: onlyIfStale) {
                             try await self.syncMailbox(mailbox)
                         }

@@ -76,6 +76,10 @@ extension MailStore {
         // Pull the sent copy so the reply shows in its thread (and the inbox when you wrote to yourself).
         let accountID = message.accountID
         let toSelf = message.allRecipients.contains { isMe($0) }
+        if mailbox(accountID: accountID, role: .sent) == nil, !(mailboxesByAccount[accountID] ?? []).isEmpty {
+            // The service created Sent for this copy (servers that start without one).
+            try? await ensureMailboxes(accountID: accountID, force: true)
+        }
         if let sent = mailbox(accountID: accountID, role: .sent) {
             try? await syncMailbox(sent, fresh: true)
         }

@@ -233,7 +233,13 @@ public struct Conversation: Identifiable, Hashable, Sendable {
 
     public init(id: String, messages: [MessageSummary]) {
         self.id = id
-        self.messages = messages.sorted { $0.date < $1.date }
+        // Date headers have one-second resolution: ties go by when the server got them, then by
+        // UID, so the order doesn't depend on the input order or the platform's sort.
+        self.messages = messages.sorted {
+            if $0.date != $1.date { return $0.date < $1.date }
+            if $0.receivedDate != $1.receivedDate { return $0.receivedDate < $1.receivedDate }
+            return $0.uid < $1.uid
+        }
     }
 
     public var latest: MessageSummary? { messages.last }

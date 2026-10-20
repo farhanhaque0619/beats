@@ -137,8 +137,8 @@ public enum EmailHTMLDocument {
         let accent = sanitizedAccent(options.accentHex)
         return """
         :root { color-scheme: \(options.dark ? "dark" : "light"); --ink-accent: \(accent);
-          --ink-bg: #FFFFFF; --ink-text: #1D1D1F; --ink-secondary: #6E6E73; --ink-rule: #D2D2D7; --ink-fill: #F2F2F7; }
-        body.ink-dark { --ink-bg: #1C1C1E; --ink-text: #F2F2F7; --ink-secondary: #AEAEB2; --ink-rule: #48484A; --ink-fill: #2C2C2E; }
+          --ink-bg: transparent; --ink-text: #1D1D1F; --ink-secondary: #6E6E73; --ink-rule: #D2D2D7; --ink-fill: #F2F2F7; }
+        body.ink-dark { --ink-bg: transparent; --ink-text: #F2F2F7; --ink-secondary: #AEAEB2; --ink-rule: #48484A; --ink-fill: #2C2C2E; }
         html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
         html, body { margin: 0; padding: 0; background-color: var(--ink-bg); }
         body { color: var(--ink-text); font-family: \(fontStack(options.fontFamily)); font-size: \(size)px; line-height: 1.5;

@@ -98,6 +98,10 @@ actor FakeMailService: MailService {
     private var syncFailure: MailError?
     private var sendFailure: MailError?
     private var continuations: [AsyncStream<MailboxChange>.Continuation] = []
+    /// Like IMAPMailService on a server that starts bare: Archive / Trash / Junk / Sent are
+    /// created on first use, and `send` files a copy in Sent.
+    private var createsMissingFolders = false
+    private(set) var mailboxListCount = 0
 
     init(account: AccountConfig, folders: [MailboxInfo], contents: [String: [MessageSummary]], uidValidity: UInt32 = 7) {
         self.account = account
@@ -119,6 +123,25 @@ actor FakeMailService: MailService {
     }
 
     func failPerform(_ error: MailError?) { performFailure = error }
+    func createMissingFolders() { createsMissingFolders = true }
+    /// A folder made elsewhere (another app, the webmail).
+    func addFolder(_ info: MailboxInfo, messages: [MessageSummary] = []) {
+        folders.append(info)
+        contents[info.path] = contents[info.path] ?? []
+        nextUID[info.path] = nextUID[info.path] ?? 1
+        for message in messages { deliver(message, to: info.path) }
+    }
+    func folderList() -> [MailboxInfo] { folders }
+
+    /// The folder for `role`, created (as a real server would) when allowed and missing.
+    private func folder(_ role: MailboxRole, createAs name: String) -> String? {
+        if let existing = folders.first(where: { $0.role == role })?.path { return existing }
+        guard createsMissingFolders else { return nil }
+        folders.append(MailboxInfo(accountID: account.id, path: name, role: role))
+        contents[name] = contents[name] ?? []
+        nextUID[name] = nextUID[name] ?? 1
+        return name
+    }
     /// Makes `sync` answer with what the server had when it started, `seconds` later.
     func delaySync(_ seconds: Double) { syncDelay = UInt64(seconds * 1_000_000_000) }
     func failSync(_ error: MailError?) { syncFailure = error }
@@ -144,6 +167,7 @@ actor FakeMailService: MailService {
     }
 
     func mailboxes() async throws -> [MailboxInfo] {
+        mailboxListCount += 1
         if let syncFailure { throw syncFailure }
         return folders
     }
@@ -194,9 +218,9 @@ actor FakeMailService: MailService {
         if let performFailure { throw performFailure }
         let destination: String?
         switch action {
-        case .archive: destination = folders.first { $0.role == .all || $0.role == .archive }?.path
-        case .trash: destination = folders.first { $0.role == .trash }?.path
-        case .markSpam: destination = folders.first { $0.role == .junk }?.path
+        case .archive: destination = folders.first { $0.role == .all }?.path ?? folder(.archive, createAs: "Archive")
+        case .trash: destination = folder(.trash, createAs: "Trash")
+        case .markSpam: destination = folder(.junk, createAs: "Junk")
         case .moveToInbox: destination = "INBOX"
         case .move(let path): destination = path
         default: destination = nil
@@ -239,6 +263,13 @@ actor FakeMailService: MailService {
     func send(_ message: OutgoingMessage) async throws {
         if let sendFailure { throw sendFailure }
         sent.append(message)
+        if createsMissingFolders, let path = folder(.sent, createAs: "Sent") {
+            deliver(MessageSummary(accountID: account.id, mailboxPath: path, uid: 0, uidValidity: uidValidity,
+                                   messageID: "\(message.id.uuidString.lowercased())@ink.test",
+                                   inReplyTo: message.inReplyTo.map { [$0] } ?? [], references: message.references,
+                                   subject: message.subject, from: [message.from], to: message.to, cc: message.cc,
+                                   date: message.createdAt, snippet: message.body, flags: [.seen]), to: path)
+        }
     }
 
     func search(_ query: String, in mailbox: MailboxInfo, limit: Int) async throws -> [MessageSummary] {

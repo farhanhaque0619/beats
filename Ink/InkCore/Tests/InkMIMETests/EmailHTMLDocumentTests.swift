@@ -50,7 +50,8 @@ final class EmailHTMLDocumentTests: XCTestCase {
         XCTAssertTrue(simple.contains("class=\"ink ink-dark ink-simple"))
         XCTAssertTrue(simple.contains("body.ink-dark.ink-simple #ink-content *"))
         XCTAssertTrue(simple.contains("color-scheme: dark"))
-        XCTAssertTrue(simple.contains("--ink-bg: #1C1C1E"))
+        // The page is transparent so the app's own background (true black in dark mode) shows through.
+        XCTAssertTrue(simple.contains("body.ink-dark { --ink-bg: transparent;"))
         XCTAssertTrue(simple.contains("#ink-content img { background-color: #F2F2F7 !important"))   // transparent logos stay legible
 
         let designedHTML = "<body bgcolor=\"#f4f1ea\"><table width=\"600\" bgcolor=\"#ffffff\"><tr><td>Sale</td></tr></table></body>"

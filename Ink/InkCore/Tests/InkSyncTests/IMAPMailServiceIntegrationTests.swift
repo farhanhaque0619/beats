@@ -6,7 +6,7 @@ import InkSMTP
 
 // Integration tests against real servers. Plain `swift test` skips them; to run them, start the
 // servers and pass the INK_IT_* variables into the test process (or the swift container, which
-// must use --network host):
+// must use --network host). `Scripts/integration-servers.sh start|env|test|stop` does all of this:
 //
 //   # GreenMail 2.1: SMTP 3025, IMAP 3143, any user/password (users are created on first use)
 //   docker run -d --name ink-greenmail -p 3025:3025 -p 3143:3143 \
@@ -257,6 +257,214 @@ final class IMAPMailServiceIntegrationTests: XCTestCase {
         XCTAssertFalse(sentCopy.isUnread)
         XCTAssertEqual(sentCopy.bcc.map(\.address), [carol.emailAddress])
         XCTAssertEqual(sentCopy.messageID, summary.messageID)
+    }
+
+    // MARK: - summaries and bodies of real-world mail
+
+    func testSummariesAndBodiesGreenMail() async throws { try await scenarioSummariesAndBodies(try require(Server.greenMail())) }
+    func testSummariesAndBodiesDovecot() async throws { try await scenarioSummariesAndBodies(try require(Server.dovecot())) }
+
+    /// Messages shaped like real mail, appended with server-side flags and dates: what the list
+    /// shows (subject, sender, date, snippet, flags, bulk, threading headers) and what the reader
+    /// gets (HTML, plain text, inline images, attachments).
+    private func scenarioSummariesAndBodies(_ server: Server) async throws {
+        let id = uniqueID()
+        let bob = server.account("bob-\(id)")
+        let service = server.service(bob)
+        // Whole seconds, three days ago, written in a +02:00 zone.
+        let sentAt = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 3 * 86_400).rounded(.down))
+        let date = MailFixture.dateHeader(sentAt, secondsFromGMT: 7_200)
+
+        let newsletter = MailFixture.message([
+            "From: Acme Weekly <digest@acme-weekly.example>",
+            "To: \(bob.emailAddress)",
+            "Subject: =?UTF-8?Q?Your_weekly_digest_=E2=80=94_issue_42?=",
+            "Date: \(date)",
+            "Message-ID: <digest-42-\(id)@acme-weekly.example>",
+            "List-Unsubscribe: <mailto:unsubscribe@acme-weekly.example?subject=stop>,",
+            " <https://acme-weekly.example/u/42>",
+            "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
+            "MIME-Version: 1.0",
+            "Content-Type: text/html; charset=utf-8",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+            "<html><head><title>Digest</title><style>p { color: #333 }</style></head><body>",
+            "<p>Caf=C3=A9 news: the best espresso in town opens on Friday. The roaster =",
+            "moved from the harbour.</p><p><a href=3D\"https://acme-weekly.example/x\">Read more</a></p>",
+            "</body></html>",
+        ])
+
+        let replyText = "Oui, à midi. I'll book the table by the window.\r\n\r\n"
+            + "On Mon, 12 Oct 2026 at 09:00, Bob Tester <\(bob.emailAddress)> wrote:\r\n> Café at noon?\r\n"
+        let reply = MailFixture.message([
+            "From: =?ISO-8859-1?Q?Ren=E9_Descartes?= <rene@example.net>",
+            "To: Bob Tester <\(bob.emailAddress)>",
+            "Cc: \"Lovelace, Ada\" <ada@example.net>",
+            "Subject: Re: =?UTF-8?B?\(Data("Café at noon?".utf8).base64EncodedString())?=",
+            "Date: \(date)",
+            "Message-ID: <reply-\(id)@example.net>",
+            "In-Reply-To: <question-\(id)@example.org>",
+            "References: <root-\(id)@example.org>",
+            " <question-\(id)@example.org>",
+            "Auto-Submitted: no",
+            "MIME-Version: 1.0",
+            "Content-Type: multipart/alternative; boundary=\"alt-\(id)\"",
+            "",
+            "--alt-\(id)",
+            "Content-Type: text/plain; charset=ISO-8859-1",
+            "Content-Transfer-Encoding: base64",
+            "",
+        ] + MailFixture.base64Lines(try XCTUnwrap(replyText.data(using: .isoLatin1))) + [
+            "--alt-\(id)",
+            "Content-Type: text/html; charset=us-ascii",
+            "",
+            "<div>Oui, &agrave; midi. I'll book the table by the window.</div>",
+            "<blockquote type=\"cite\">Caf&eacute; at noon?</blockquote>",
+            "--alt-\(id)--",
+        ])
+
+        let notification = MailFixture.message([
+            "From: Build Bot <ci@builds.example>",
+            "To: \(bob.emailAddress)",
+            "Subject: Build #812 passed",
+            "Date: \(date)",
+            "Message-ID: <build-812-\(id)@builds.example>",
+            "Auto-Submitted: auto-generated",
+            "MIME-Version: 1.0",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "main is green again: 1,204 tests passed in 3m 12s.",
+        ])
+
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x01])
+        let pdf = Data("%PDF-1.4\n% Ink integration test\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n".utf8)
+        let resume = MailFixture.message([
+            "From: Grace Hopper <grace@example.net>",
+            "To: \(bob.emailAddress)",
+            "Subject: =?UTF-8?Q?My_r=C3=A9sum=C3=A9?=",
+            "Date: \(date)",
+            "Message-ID: <cv-\(id)@example.net>",
+            "MIME-Version: 1.0",
+            "Content-Type: multipart/mixed; boundary=\"mixed-\(id)\"",
+            "",
+            "This is a multi-part message in MIME format.",
+            "--mixed-\(id)",
+            "Content-Type: multipart/related; boundary=\"rel-\(id)\"; type=\"text/html\"",
+            "",
+            "--rel-\(id)",
+            "Content-Type: text/html; charset=utf-8",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+            "<p>Please find my r=C3=A9sum=C3=A9 attached.</p><p><img src=3D\"cid:logo-\(id)@example.net\" alt=3D\"logo\"></p>",
+            "--rel-\(id)",
+            "Content-Type: image/png",
+            "Content-Transfer-Encoding: base64",
+            "Content-ID: <logo-\(id)@example.net>",
+            "Content-Disposition: inline; filename=\"logo.png\"",
+            "",
+        ] + MailFixture.base64Lines(png) + [
+            "--rel-\(id)--",
+            "--mixed-\(id)",
+            "Content-Type: application/pdf; name=\"=?UTF-8?Q?R=C3=A9sum=C3=A9.pdf?=\"",
+            "Content-Transfer-Encoding: base64",
+            "Content-Disposition: attachment; filename*=UTF-8''R%C3%A9sum%C3%A9.pdf",
+            "",
+        ] + MailFixture.base64Lines(pdf) + [
+            "--mixed-\(id)--",
+        ])
+
+        let client = try await server.client(bob)
+        _ = try await client.append(to: "INBOX", message: newsletter, date: sentAt)
+        _ = try await client.append(to: "INBOX", message: reply, flags: ["\\Seen", "\\Flagged"], date: sentAt)
+        _ = try await client.append(to: "INBOX", message: notification, flags: ["\\Seen"], date: sentAt)
+        _ = try await client.append(to: "INBOX", message: resume, date: sentAt)
+        await client.logout()
+
+        let inboxBox = try await inbox(service)
+        let result = try await service.sync(mailbox: inboxBox, previous: nil, limit: 50)
+        XCTAssertEqual(result.upserted.map(\.subject),
+                       ["My résumé", "Build #812 passed", "Re: Café at noon?", "Your weekly digest — issue 42"], "newest first")
+        XCTAssertEqual(Set(result.state.knownUIDs), Set(result.upserted.map(\.uid)))
+        for summary in result.upserted {
+            XCTAssertEqual(summary.date, sentAt, "\(summary.subject): the Date header, zone applied")
+            XCTAssertLessThan(abs(summary.receivedDate.timeIntervalSince(sentAt)), 2, "\(summary.subject): APPEND's internal date")
+            XCTAssertEqual(summary.mailboxPath, inboxBox.path)
+            XCTAssertEqual(summary.to.map(\.address), [bob.emailAddress])
+        }
+        let bySubject = Dictionary(uniqueKeysWithValues: result.upserted.map { ($0.subject, $0) })
+
+        // Newsletter: bulk because of List-Unsubscribe; snippet from HTML without head or styles.
+        let digest = try XCTUnwrap(bySubject["Your weekly digest — issue 42"])
+        XCTAssertTrue(digest.isBulk)
+        XCTAssertTrue(digest.isUnread)
+        XCTAssertFalse(digest.hasAttachments)
+        XCTAssertEqual(digest.from, [EmailAddress(name: "Acme Weekly", address: "digest@acme-weekly.example")])
+        XCTAssertEqual(digest.from.first?.name, "Acme Weekly")
+        XCTAssertEqual(digest.listUnsubscribe, "<mailto:unsubscribe@acme-weekly.example?subject=stop>, <https://acme-weekly.example/u/42>")
+        XCTAssertEqual(digest.listUnsubscribePost, "List-Unsubscribe=One-Click")
+        XCTAssertTrue(digest.snippet.hasPrefix("Café news: the best espresso in town opens on Friday. The roaster moved from the harbour."),
+                      digest.snippet)
+        XCTAssertFalse(digest.snippet.contains("color"), digest.snippet)
+        XCTAssertFalse(digest.snippet.contains("Digest"), digest.snippet)
+
+        // Personal reply: decoded names, threading headers, flags from the server, quote stripped.
+        let answer = try XCTUnwrap(bySubject["Re: Café at noon?"])
+        XCTAssertFalse(answer.isBulk, "Auto-Submitted: no is a person")
+        XCTAssertFalse(answer.isUnread)
+        XCTAssertTrue(answer.isFlagged)
+        XCTAssertEqual(answer.from.first?.name, "René Descartes")
+        XCTAssertEqual(answer.from.first?.address, "rene@example.net")
+        XCTAssertEqual(answer.cc.first?.name, "Lovelace, Ada")
+        XCTAssertEqual(answer.cc.first?.address, "ada@example.net")
+        XCTAssertEqual(answer.messageID, "reply-\(id)@example.net")
+        XCTAssertEqual(answer.inReplyTo, ["question-\(id)@example.org"])
+        XCTAssertEqual(answer.references, ["root-\(id)@example.org", "question-\(id)@example.org"])
+        XCTAssertEqual(answer.snippet, "Oui, à midi. I'll book the table by the window.")
+        XCTAssertNil(answer.listUnsubscribe)
+
+        // Notification: bulk because of Auto-Submitted, already read.
+        let build = try XCTUnwrap(bySubject["Build #812 passed"])
+        XCTAssertTrue(build.isBulk)
+        XCTAssertFalse(build.isUnread)
+        XCTAssertFalse(build.isFlagged)
+        XCTAssertEqual(build.snippet, "main is green again: 1,204 tests passed in 3m 12s.")
+
+        // Attachments: the snippet comes from the HTML inside multipart/related.
+        let cv = try XCTUnwrap(bySubject["My résumé"])
+        XCTAssertTrue(cv.hasAttachments)
+        XCTAssertFalse(cv.isBulk)
+        XCTAssertTrue(cv.isUnread)
+        XCTAssertEqual(cv.snippet, "Please find my résumé attached.")
+        XCTAssertGreaterThan(cv.size, pdf.count + png.count)
+
+        // Bodies.
+        let answerBody = try await service.body(for: answer)
+        XCTAssertEqual(answerBody.messageID, answer.id)
+        XCTAssertTrue(answerBody.plainText?.contains("Oui, à midi.") ?? false, answerBody.plainText ?? "nil")
+        XCTAssertTrue(answerBody.plainText?.contains("> Café at noon?") ?? false, "the body keeps the quote; only the snippet drops it")
+        XCTAssertTrue(answerBody.html?.contains("blockquote") ?? false)
+        XCTAssertTrue(answerBody.attachments.isEmpty)
+
+        let digestBody = try await service.body(for: digest)
+        XCTAssertTrue(digestBody.html?.contains("Café news") ?? false, digestBody.html ?? "nil")
+        XCTAssertTrue(digestBody.attachments.isEmpty)
+
+        let cvBody = try await service.body(for: cv)
+        XCTAssertTrue(cvBody.html?.contains("cid:logo-\(id)@example.net") ?? false, cvBody.html ?? "nil")
+        XCTAssertTrue(cvBody.html?.contains("Please find my résumé attached.") ?? false)
+        XCTAssertEqual(cvBody.visibleAttachments.map(\.filename), ["Résumé.pdf"])
+        XCTAssertEqual(cvBody.visibleAttachments.first?.mimeType, "application/pdf")
+        XCTAssertEqual(cvBody.visibleAttachments.first?.data, pdf)
+        let logo = try XCTUnwrap(cvBody.attachments.first { $0.isInline })
+        XCTAssertEqual(logo.contentID, "logo-\(id)@example.net")
+        XCTAssertEqual(logo.mimeType, "image/png")
+        XCTAssertEqual(logo.data, png)
+
+        // Reading bodies used BODY.PEEK: nothing became read.
+        let after = try await service.sync(mailbox: inboxBox, previous: result.state, limit: 50)
+        XCTAssertTrue(after.upserted.isEmpty, after.upserted.map(\.subject).description)
+        XCTAssertTrue(after.removedIDs.isEmpty)
+        await service.disconnect()
     }
 
     // MARK: - flags and incremental sync
@@ -562,6 +770,32 @@ final class IMAPMailServiceIntegrationTests: XCTestCase {
         await bobService.disconnect()
         await fulfillment(of: [ended], timeout: 15)
         waiter.cancel()
+    }
+}
+
+/// Raw RFC 5322 messages for fixtures, CRLF throughout.
+enum MailFixture {
+    static func message(_ lines: [String]) -> Data {
+        Data((lines.joined(separator: "\r\n") + "\r\n").utf8)
+    }
+
+    /// Base64 in 76-character lines.
+    static func base64Lines(_ data: Data) -> [String] {
+        let encoded = data.base64EncodedString()
+        return stride(from: 0, to: encoded.count, by: 76).map { start in
+            let from = encoded.index(encoded.startIndex, offsetBy: start)
+            let to = encoded.index(from, offsetBy: min(76, encoded.count - start))
+            return String(encoded[from..<to])
+        }
+    }
+
+    /// `Tue, 13 Oct 2026 09:30:00 +0200` in the given zone.
+    static func dateHeader(_ date: Date, secondsFromGMT: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: secondsFromGMT)
+        formatter.dateFormat = "EEE, d MMM yyyy HH:mm:ss Z"
+        return formatter.string(from: date)
     }
 }
 

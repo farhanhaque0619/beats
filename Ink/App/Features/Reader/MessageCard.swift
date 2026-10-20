@@ -46,29 +46,34 @@ struct MessageCard: View {
 
     private var collapsed: some View {
         Button(action: onToggle) {
-            HStack(spacing: InkSpace.m) {
+            // Two lines, like Apple Mail: who and when on top, what they said underneath, so the
+            // preview gets the full width instead of what's left beside the name.
+            HStack(alignment: .top, spacing: InkSpace.m) {
                 AvatarView(address: message.sender, size: InkSize.avatarSmall)
-                Text(senderName)
-                    .font(message.isUnread ? InkFont.sender : InkFont.senderRead)
-                    .foregroundStyle(Ink.primary)
-                    .lineLimit(1)
-                    .frame(maxWidth: 200, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .layoutPriority(1)
-                Text(message.snippet)
-                    .font(InkFont.snippet)
-                    .foregroundStyle(Ink.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if message.hasAttachments {
-                    Image(systemName: "paperclip")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Ink.tertiary)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: InkSpace.s) {
+                        Text(senderName)
+                            .font(message.isUnread ? InkFont.sender : InkFont.senderRead)
+                            .foregroundStyle(Ink.primary)
+                            .lineLimit(1)
+                        Spacer(minLength: InkSpace.s)
+                        if message.hasAttachments {
+                            Image(systemName: "paperclip")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(Ink.tertiary)
+                        }
+                        Text(InkDate.listTimestamp(message.date))
+                            .font(InkFont.meta)
+                            .foregroundStyle(Ink.tertiary)
+                            .fixedSize()
+                    }
+                    if !message.snippet.isEmpty {
+                        Text(message.snippet)
+                            .font(InkFont.snippet)
+                            .foregroundStyle(Ink.secondary)
+                            .lineLimit(1)
+                    }
                 }
-                Text(InkDate.listTimestamp(message.date))
-                    .font(InkFont.meta)
-                    .foregroundStyle(Ink.tertiary)
-                    .fixedSize()
             }
             .padding(.horizontal, InkSpace.gutter)
             .padding(.vertical, InkSpace.m)

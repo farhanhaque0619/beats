@@ -513,6 +513,14 @@ extension MailStore {
             return
         }
         finishProtection(action.protectionID)
+        // The service just created Archive / Trash / Junk: read the folder list so it shows.
+        var relisted = Set<String>()
+        for operation in action.operations where !relisted.contains(operation.accountID)
+            && destinationIsMissing(operation.action, accountID: operation.accountID) {
+            relisted.insert(operation.accountID)
+            let accountID = operation.accountID
+            track { try? await self.ensureMailboxes(accountID: accountID, force: true) }
+        }
         for followUp in action.followUps {
             switch followUp {
             case .markStale(let accountID, let path):

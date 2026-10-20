@@ -26,6 +26,8 @@ struct OnboardingAccountForm: View {
     @State private var discoveryStatus: OnboardingDiscoveryStatus = .idle
     @State private var showsServerSettings = false
     @State private var isAuthorizing = false
+    /// Chose "Use an app password instead" on a provider that offers sign-in.
+    @State private var prefersAppPassword = false
     @FocusState private var focus: Field?
 
     private enum Field: Hashable {
@@ -134,7 +136,9 @@ struct OnboardingAccountForm: View {
 
     @ViewBuilder private var authContent: some View {
         let auth = self.auth
-        if auth.allowsPassword {
+        if signsInFirst {
+            signInFirstContent
+        } else if auth.allowsPassword {
             if auth.isOAuthAvailable, let oauth = auth.oauth {
                 OnboardingOAuthButton(provider: oauth, prominent: false, isWorking: isAuthorizing) {
                     signIn(with: oauth)
@@ -170,6 +174,36 @@ struct OnboardingAccountForm: View {
                 OnboardingOAuthUnavailableCard(provider: oauth)
             }
         }
+    }
+
+    /// Gmail with Sign in with Google in this build: no form at all. The provider's page asks who
+    /// you are, and its answer fills in the address and name.
+    private var signInFirstContent: some View {
+        VStack(alignment: .leading, spacing: InkSpace.m) {
+            Label {
+                Text("Your password goes to \(signInCompany) only. Ink gets a key to your mail that you can revoke any time.")
+                    .font(.subheadline)
+                    .foregroundStyle(Ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "lock.shield")
+                    .foregroundStyle(Ink.secondary)
+            }
+            Button("Use an app password instead") {
+                Haptics.tick()
+                connector.clearFailure()
+                withAnimation(InkMotion.smooth) { prefersAppPassword = true }
+                // The fields only exist once the switch has rendered.
+                Task {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    if connector.phase == .editing { focus = .name }
+                }
+            }
+            .buttonStyle(.inkAccent)
+        }
+        .padding(InkSpace.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Ink.fill, in: RoundedRectangle(cornerRadius: InkRadius.medium, style: .continuous))
     }
 
     private func identityFields(includesPassword: Bool) -> some View {
@@ -265,7 +299,13 @@ struct OnboardingAccountForm: View {
 
     @ViewBuilder private var bottomBar: some View {
         let auth = self.auth
-        if auth.allowsPassword {
+        if signsInFirst, let oauth = auth.oauth {
+            OnboardingOAuthButton(provider: oauth, prominent: true, isWorking: isAuthorizing) {
+                signIn(with: oauth)
+            }
+            .keyboardShortcut(.defaultAction)
+            .modifier(OnboardingBottomBar())
+        } else if auth.allowsPassword {
             Button(action: connectWithPassword) {
                 Text("Connect")
             }
@@ -306,6 +346,15 @@ struct OnboardingAccountForm: View {
     private var provider: OnboardingProvider { OnboardingProvider.info(for: guideID) }
     private var auth: OnboardingAuth { provider.auth }
 
+    private var signInCompany: String { auth.oauth == .microsoft ? "Microsoft" : "Google" }
+
+    /// The provider takes both an app password and sign-in, and sign-in is set up in this build:
+    /// lead with sign-in. Not for Other, where the address being typed picks the provider and the
+    /// field can't vanish under the cursor.
+    private var signsInFirst: Bool {
+        choice != .other && auth.allowsPassword && auth.isOAuthAvailable && auth.oauth != nil && !prefersAppPassword
+    }
+
     private var suggestedProvider: ProviderID? {
         guard choice != .other, let detected = emailPresetID, detected != choice else { return nil }
         return detected
@@ -316,6 +365,9 @@ struct OnboardingAccountForm: View {
     }
 
     private var subtitle: String {
+        if signsInFirst {
+            return "Sign in on \(signInCompany)'s own page, and Ink takes it from there."
+        }
         if choice == .other, guideID != .other {
             return emailPresetID != nil
                 ? "Looks like \(provider.name). Ink knows its settings."
@@ -492,7 +544,7 @@ struct OnboardingAccountForm: View {
 
     /// Puts the cursor in the first field once the slide-in has settled.
     private func focusFirstField() async {
-        guard auth.allowsPassword else { return }
+        guard auth.allowsPassword, !signsInFirst else { return }
         try? await Task.sleep(nanoseconds: 450_000_000)
         guard !Task.isCancelled, focus == nil, connector.phase == .editing else { return }
         focus = .name

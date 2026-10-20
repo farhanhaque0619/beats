@@ -8,8 +8,9 @@ import InkCore
 /// iPhone, and Mac builds signed with a provisioning profile: the data-protection keychain, one
 /// generic-password item per account (service + account ID) holding the JSON-encoded `Credential`.
 ///
-/// Unsigned and ad-hoc signed Mac builds lack the entitlement for that (`errSecMissingEntitlement`),
-/// so the store falls back to the legacy file keychain. There every account's secret lives in ONE
+/// Unsigned and ad-hoc signed Mac builds (the CI DMG) lack the entitlement for that, so the store
+/// uses the legacy file keychain instead. It decides from the app's own entitlements, and also
+/// switches the first time the data-protection keychain answers `errSecMissingEntitlement`. There every account's secret lives in ONE
 /// item: each new ad-hoc build asks "Ink wants to use your confidential information…" once per
 /// item it reads, so one item means one prompt per update instead of one per account. Items from
 /// builds that kept one item per account are moved into it the first time they're read.
@@ -82,13 +83,24 @@ actor KeychainCredentialStore: CredentialStore {
         inFlightRefreshes[accountID] = nil
         cache[accountID] = nil
         #if os(macOS)
-        if !dataProtectionAvailable() {
-            try deleteFromVault(accountID: accountID)
-            return
+        if dataProtectionAvailable() {
+            do {
+                return try deleteFromDataProtection(accountID: accountID)
+            } catch is MissingEntitlement {
+                usesDataProtectionKeychain = false
+            }
         }
+        try deleteFromVault(accountID: accountID)
+        #else
+        try deleteFromDataProtection(accountID: accountID)
         #endif
+    }
+
+    private func deleteFromDataProtection(accountID: String) throws {
         let status = deleteItem(accountID: accountID, dataProtection: true)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw Self.failure(status) }
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw Self.error(for: status, dataProtection: true)
+        }
     }
 
     // MARK: OAuth refresh
@@ -135,23 +147,38 @@ actor KeychainCredentialStore: CredentialStore {
 
     private func load(accountID: String) throws -> Credential? {
         #if os(macOS)
-        if !dataProtectionAvailable() { return try loadFromVault(accountID: accountID) }
-        #endif
+        if dataProtectionAvailable() {
+            do {
+                return try loadItem(accountID: accountID, dataProtection: true)
+            } catch is MissingEntitlement {
+                usesDataProtectionKeychain = false
+            }
+        }
+        return try loadFromVault(accountID: accountID)
+        #else
         return try loadItem(accountID: accountID, dataProtection: true)
+        #endif
     }
 
     private func store(_ credential: Credential, accountID: String) throws {
         #if os(macOS)
-        if !dataProtectionAvailable() {
-            var updated = try loadVault()
-            updated[accountID] = credential
-            try saveVault(updated)
-            cache[accountID] = credential
-            return
+        if dataProtectionAvailable() {
+            do {
+                try storeItem(credential, accountID: accountID, dataProtection: true)
+                cache[accountID] = credential
+                return
+            } catch is MissingEntitlement {
+                usesDataProtectionKeychain = false
+            }
         }
-        #endif
+        var updated = try loadVault()
+        updated[accountID] = credential
+        try saveVault(updated)
+        cache[accountID] = credential
+        #else
         try storeItem(credential, accountID: accountID, dataProtection: true)
         cache[accountID] = credential
+        #endif
     }
 
     // MARK: One item per account
@@ -170,7 +197,7 @@ actor KeychainCredentialStore: CredentialStore {
         case errSecItemNotFound:
             return nil
         default:
-            throw Self.failure(status)
+            throw Self.error(for: status, dataProtection: dataProtection)
         }
     }
 
@@ -194,7 +221,7 @@ actor KeychainCredentialStore: CredentialStore {
             item[kSecAttrLabel as String] = label
             status = SecItemAdd(item as CFDictionary, nil)
         }
-        guard status == errSecSuccess else { throw Self.failure(status) }
+        guard status == errSecSuccess else { throw Self.error(for: status, dataProtection: dataProtection) }
     }
 
     @discardableResult
@@ -217,17 +244,21 @@ actor KeychainCredentialStore: CredentialStore {
     // MARK: Mac without the keychain entitlement
 
     #if os(macOS)
-    /// Whether this build may use the data-protection keychain. Asked once: a lookup there fails
-    /// with `errSecMissingEntitlement` in unsigned and ad-hoc signed builds.
+    /// Whether this build may use the data-protection keychain. A lookup can't tell: without the
+    /// entitlement, reads there answer "not found" and only writes fail with
+    /// `errSecMissingEntitlement`. So it checks for the entitlements that grant access, which only
+    /// a provisioning profile can give (TN3137); ad-hoc and unsigned builds have none of them.
     private func dataProtectionAvailable() -> Bool {
         if let usesDataProtectionKeychain { return usesDataProtectionKeychain }
-        var probe = baseQuery(accountID: Self.vaultAccount, dataProtection: true)
-        probe[kSecReturnAttributes as String] = true
-        probe[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let available = SecItemCopyMatching(probe as CFDictionary, &result) != Self.missingEntitlement
+        let available = Self.hasKeychainAccessEntitlement()
         usesDataProtectionKeychain = available
         return available
+    }
+
+    private static func hasKeychainAccessEntitlement() -> Bool {
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        let keys = ["keychain-access-groups", "com.apple.application-identifier", "com.apple.security.application-groups"]
+        return keys.contains { SecTaskCopyValueForEntitlement(task, $0 as CFString, nil) != nil }
     }
 
     /// Every account's credential from the single legacy item (read once per launch).
@@ -289,6 +320,16 @@ actor KeychainCredentialStore: CredentialStore {
     #endif
 
     // MARK: Errors
+
+    /// The data-protection keychain refused this build: use the legacy keychain instead.
+    private struct MissingEntitlement: Error {}
+
+    private static func error(for status: OSStatus, dataProtection: Bool) -> Error {
+        #if os(macOS)
+        if dataProtection && status == missingEntitlement { return MissingEntitlement() }
+        #endif
+        return failure(status)
+    }
 
     private static func signInAgain(_ account: AccountConfig) -> MailError {
         .authenticationFailed("Sign in again to \(account.emailAddress).")

@@ -10,7 +10,7 @@ Most providers no longer accept your normal password from third-party apps. You 
 
 | Provider | How you sign in | Notes |
 |---|---|---|
-| Gmail / Google | App password (OAuth optional) | Needs 2-Step Verification. Not possible on Advanced Protection accounts. |
+| Gmail / Google | Sign in with Google (one-time setup below), or an app password | App passwords need 2-Step Verification and aren't possible on Advanced Protection accounts. |
 | iCloud Mail | App-specific password | Needs two-factor authentication (on for nearly everyone). |
 | Outlook.com / Hotmail / Live | Sign in with Microsoft only | Needs a one-time app registration (below). Turn on IMAP in Outlook settings. |
 | Yahoo / AOL | App password | Yahoo sometimes refuses to make app passwords for an account. |
@@ -74,9 +74,14 @@ A plain personal Microsoft account can't make one, but a free Azure account come
 Ink asks for `IMAP.AccessAsUser.All`, `SMTP.Send` and `offline_access`, and uses PKCE with no
 client secret.
 
-## Gmail with "Sign in with Google" (optional)
+## Gmail with "Sign in with Google"
 
-App passwords are simpler. If you'd rather use OAuth:
+Google only shows its sign-in page to apps registered with Google, and reading Gmail is a
+*restricted* permission: a public app needs Google's review, and usually a paid yearly security
+assessment, before strangers can use it. That's what Spark and Outlook went through. For
+your own use you can skip all of that with your own registration (about 5 minutes, free). Once a
+build has its client ID, the Gmail screen leads with **Sign in with Google** and the app password
+becomes the fallback.
 
 1. <https://console.cloud.google.com> › create a project › **Google Auth Platform**.
 2. **Branding**: app name "Ink", your email. **Audience**: External, then add yourself as a
@@ -88,7 +93,10 @@ App passwords are simpler. If you'd rather use OAuth:
    days. Published but unverified apps are fine for personal use: you click through one "Google
    hasn't verified this app" warning, and there's a 100-user cap that doesn't matter here. Google may
    ask for a home page and privacy policy URL before it lets you publish.
-6. Set `INK_GOOGLE_CLIENT_ID` the same way as the Microsoft ID above.
+6. Put the client ID in `Ink/Config/Ink.xcconfig` (`INK_GOOGLE_CLIENT_ID = …apps.googleusercontent.com`)
+   and push; every build after that has Google sign-in, Mac and iPhone. A client ID for an
+   installed app isn't a secret (every iPhone app ships its own inside it). The GitHub variable
+   `INK_GOOGLE_CLIENT_ID` works too, if you'd rather keep it out of the code.
 
 ## Other providers and custom domains
 

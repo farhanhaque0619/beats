@@ -33,6 +33,10 @@ struct MacDetailColumn: View {
                 // Closed by clicking outside: forget the targets (unless the sheet took over).
                 if !presented && !app.isSnoozePickerPresented { app.snoozeTargets = [] }
             }
+            .onChange(of: app.isSnoozePickerPresented) { _, presented in
+                // ⌃⌘H or the bulk panel opened the window's snooze sheet: never show both.
+                if presented { isSnoozePopoverPresented = false }
+            }
     }
 
     @ViewBuilder

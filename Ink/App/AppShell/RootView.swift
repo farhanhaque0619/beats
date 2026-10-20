@@ -19,7 +19,7 @@ struct RootView: View {
         }
         .animation(InkMotion.smooth, value: showsWelcome)
         .background(Ink.background.ignoresSafeArea())
-        .sheet(item: $app.composeDraft) { draft in
+        .sheet(item: composeDraft) { draft in
             ComposeView(draft: draft)
                 .environment(app)
                 .environment(app.store)
@@ -27,7 +27,7 @@ struct RootView: View {
                 .environment(\.inkAccent, accent)
                 .tint(accent)
         }
-        .sheet(isPresented: $app.isSnoozePickerPresented, onDismiss: { app.snoozeTargets = [] }) {
+        .sheet(isPresented: isSnoozePickerPresented, onDismiss: { app.snoozeTargets = [] }) {
             SnoozePicker(conversations: app.snoozeTargets)
                 .environment(app)
                 .environment(\.inkAccent, accent)
@@ -62,6 +62,34 @@ struct RootView: View {
     private var showsWelcome: Bool {
         if let scene = app.screenshot { return scene == .welcome }
         return !app.store.hasAccounts
+    }
+
+    /// On iPhone, search is a full-screen cover, and a sheet can't present from underneath it.
+    /// While it's up, `SearchScreen` hosts Compose and Snooze itself, so these stay closed here.
+    private var searchHostsSheets: Bool {
+        #if os(iOS)
+        return app.isSearchPresented
+        #else
+        return false
+        #endif
+    }
+
+    private var composeDraft: Binding<OutgoingMessage?> {
+        Binding(
+            get: { searchHostsSheets ? nil : app.composeDraft },
+            set: { draft in
+                if !searchHostsSheets { app.composeDraft = draft }
+            }
+        )
+    }
+
+    private var isSnoozePickerPresented: Binding<Bool> {
+        Binding(
+            get: { app.isSnoozePickerPresented && !searchHostsSheets },
+            set: { isPresented in
+                if !searchHostsSheets { app.isSnoozePickerPresented = isPresented }
+            }
+        )
     }
 
     @ViewBuilder private var main: some View {

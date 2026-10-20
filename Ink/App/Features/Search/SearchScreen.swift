@@ -41,6 +41,7 @@ struct SearchScreen: View {
     }
 
     var body: some View {
+        @Bindable var app = app
         if embedded {
             content
         } else {
@@ -53,6 +54,25 @@ struct SearchScreen: View {
                         destination(for: id)
                     }
             }
+            #if os(iOS)
+            // A full-screen cover hides RootView's sheets and toast, so a thread opened from the
+            // results replies, snoozes and undoes from here (RootView holds its own back meanwhile).
+            .overlay { ToastOverlay(bottomInset: path.isEmpty ? 0 : 64) }
+            .sheet(item: $app.composeDraft) { draft in
+                ComposeView(draft: draft)
+                    .environment(app)
+                    .environment(app.store)
+                    .environment(app.settings)
+                    .environment(\.inkAccent, accent)
+                    .tint(accent)
+            }
+            .sheet(isPresented: $app.isSnoozePickerPresented, onDismiss: { app.snoozeTargets = [] }) {
+                SnoozePicker(conversations: app.snoozeTargets)
+                    .environment(app)
+                    .environment(\.inkAccent, accent)
+                    .tint(accent)
+            }
+            #endif
             .environment(app.store)
             .environment(app.settings)
         }

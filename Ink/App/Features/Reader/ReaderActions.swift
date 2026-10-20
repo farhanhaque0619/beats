@@ -18,10 +18,11 @@ struct ReaderActions {
     /// Called right before the snooze picker opens for this conversation.
     let willSnooze: (_ wasFocused: Bool) -> Void
 
-    /// Whether this thread is the one `AppModel` navigation points at.
+    /// Whether this thread is the one `AppModel` navigation points at. On iPhone a thread opened
+    /// from search lives in the search cover's own stack, never in `phonePath`.
     var isFocused: Bool {
         #if os(iOS)
-        return app.phonePath.last == conversation.id
+        return !app.isSearchPresented && app.phonePath.last == conversation.id
         #else
         return app.selection.contains(conversation.id)
         #endif
@@ -353,6 +354,10 @@ private struct ReaderMacSnoozeButton: View {
         .onChange(of: isPresented) { _, presented in
             // Closed by clicking outside: forget the target (unless the sheet took over).
             if !presented && !app.isSnoozePickerPresented { app.snoozeTargets = [] }
+        }
+        .onChange(of: app.isSnoozePickerPresented) { _, sheetIsUp in
+            // Snooze from the menu or keyboard opens RootView's sheet; never show both.
+            if sheetIsUp { isPresented = false }
         }
     }
 }

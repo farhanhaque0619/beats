@@ -176,7 +176,9 @@ extension IMAPMailServiceWatcher {
 struct IMAPMailServiceIdlePlan: Equatable {
     var refresh: TimeInterval
     var resyncEachRenewal: Bool
+}
 
+extension IMAPMailServiceIdlePlan {
     init(options: IMAPMailService.Options, isGmail: Bool, missesDeletions: Bool) {
         var refresh = options.idleRefresh
         if isGmail { refresh = min(refresh, options.gmailIdleRefresh) }

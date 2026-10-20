@@ -81,3 +81,11 @@ open /Applications/Overdrive.app
 ```
 
 Every push builds on GitHub Actions and updates the release.
+
+## Also in this repo: Ink
+
+[**Ink**](Ink/README.md) is a separate project in the `Ink/` folder: a minimal, black-and-white email app for
+iPhone and Mac (SwiftUI, IMAP/SMTP straight from your device, no server). It has its own build
+([workflow](.github/workflows/ink.yml)) and its own pre-release,
+[`ink-latest`](https://github.com/farhanhaque0619/beats/releases/tag/ink-latest), which never replaces Overdrive's
+latest release.

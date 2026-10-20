@@ -33,10 +33,13 @@ public actor DemoMailService: MailService {
                   snapshot: DemoContent.snapshot(account: account, now: date, uidValidity: Self.uidValidity(for: date)))
     }
 
-    /// The UIDVALIDITY a demo session started at `date` uses: one per minute, never zero.
+    /// The UIDVALIDITY a demo session started at `date` uses: one per second, never zero. A launch
+    /// right after the last one (same minute) is still a new session, so the cache of the old one
+    /// resets instead of mixing its folders with the fresh sample mail.
     static func uidValidity(for date: Date) -> UInt32 {
-        let minutes = max(1, Int(date.timeIntervalSince1970.isFinite ? date.timeIntervalSince1970 : 60) / 60)
-        let validity = UInt32(truncatingIfNeeded: minutes)
+        let seconds = date.timeIntervalSince1970
+        guard seconds.isFinite, seconds >= 1, seconds < Double(Int64.max) else { return 1 }
+        let validity = UInt32(truncatingIfNeeded: Int64(seconds))
         return validity == 0 ? 1 : validity
     }
 
@@ -241,10 +244,21 @@ public actor DemoMailService: MailService {
             var haystack = message.subject + " " + message.snippet
             for address in message.from + message.to + message.cc { haystack += " \(address.name ?? "") \(address.address)" }
             if let id = message.messageID, let text = bodies[id.lowercased()]?.plainText { haystack += " " + text }
-            let lowered = haystack.lowercased()
-            return terms.allSatisfy { lowered.contains($0) }
+            let lowered = Array(haystack.lowercased().utf8)
+            return terms.allSatisfy { Self.bytes(lowered, contain: Array($0.utf8)) }
         }
         return Array(hits.suffix(max(0, limit)))
+    }
+
+    /// Substring search on UTF-8 bytes: the same answer on every platform (`String.contains`
+    /// is Character-based on Apple platforms and Foundation's search on Linux).
+    static func bytes(_ haystack: [UInt8], contain needle: [UInt8]) -> Bool {
+        guard !needle.isEmpty else { return true }
+        guard needle.count <= haystack.count else { return false }
+        for start in 0...(haystack.count - needle.count) where haystack[start] == needle[0] {
+            if haystack[start..<(start + needle.count)].elementsEqual(needle) { return true }
+        }
+        return false
     }
 
     public nonisolated func watch(mailbox: MailboxInfo) -> AsyncStream<MailboxChange> {

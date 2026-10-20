@@ -85,16 +85,21 @@ enum DemoContent {
     private static func addToday(_ b: inout DemoBuilder) {
         let me = b.me
 
-        // A four-message work thread with Alex's own reply; the newest message is unread.
+        // A four-message work thread with Alex's own reply; the newest message is unread. The
+        // review is a weekday a couple of days out, and the plan covers this quarter's months.
+        let quarter = b.quarter(of: b.now)
+        let reviewDay = b.format(b.workday(atLeast: 2, after: b.now), "EEEE")
+        let months = (0...3).map { b.month($0, from: b.now) }
+        func milestone(_ index: Int, _ text: String) -> String { months[index].padding(toLength: 11, withPad: " ", startingAt: 0) + text }
         b.add("q4-roadmap.1", from: priya, to: [me], cc: [marcus],
-              subject: "Q4 roadmap review — draft for Thursday", date: b.yesterday(17, 42),
+              subject: "\(quarter) roadmap review — draft for \(reviewDay)", date: b.yesterday(17, 42),
               text: """
               Hi Alex,
 
-              Attached is the first full draft of the Q4 roadmap ahead of Thursday's review. The big changes since the offsite:
+              Attached is the first full draft of the \(quarter) roadmap ahead of \(reviewDay)'s review. The big changes since the offsite:
 
-              • Onboarding v2 moves up to October — it's our biggest lever on week-one retention.
-              • Offline mode slips to January so we can do it properly.
+              • Onboarding v2 moves up to \(months[0]) — it's our biggest lever on week-one retention.
+              • Offline mode slips to \(months[3]) so we can do it properly.
               • Search gets a small, dedicated squad (Marcus has thoughts on staffing).
 
               Could you take a pass at the onboarding section in particular? I'd love your read on whether the milestones are realistic for design.
@@ -103,45 +108,45 @@ enum DemoContent {
               Priya
               """,
               answered: true,
-              attachments: [DemoBuilder.attachment(2, "Q4-Roadmap-Draft.pdf", "application/pdf", DemoAssets.pdf(
-                  title: "Q4 Roadmap — Draft v2", subtitle: "Fieldstone Product · Prepared by Priya Natarajan",
+              attachments: [DemoBuilder.attachment(2, "\(quarter)-Roadmap-Draft.pdf", "application/pdf", DemoAssets.pdf(
+                  title: "\(quarter) Roadmap — Draft v2", subtitle: "Fieldstone Product · Prepared by Priya Natarajan",
                   lines: [
                       "# Themes", "1. Week-one retention: Onboarding v2 (checklist, sample project, invites).",
                       "2. Reliability: offline mode foundations, sync conflict handling.", "3. Findability: search squad, saved filters.",
-                      "", "# Milestones", "October    Onboarding v2 design complete; checklist in beta.",
-                      "November   Onboarding v2 to 100%; search squad staffed.", "December   Search v1 (titles + people) behind a flag.",
-                      "January    Offline mode target (read-only first).", "", "# Open questions",
+                      "", "# Milestones", milestone(0, "Onboarding v2 design complete; checklist in beta."),
+                      milestone(1, "Onboarding v2 to 100%; search squad staffed."), milestone(2, "Search v1 (titles + people) behind a flag."),
+                      milestone(3, "Offline mode target (read-only first)."), "", "# Open questions",
                       "- Do we cut the animated tour from v2?", "- Staffing for search: one or two engineers?",
-                      "- Is January a commitment or a target for offline mode?",
+                      "- Is \(months[3]) a commitment or a target for offline mode?",
                   ]))])
         b.add("q4-roadmap.2", folder: "Sent", from: me, to: [priya], cc: [marcus],
-              subject: "Re: Q4 roadmap review — draft for Thursday", date: b.today(112),
+              subject: "Re: \(quarter) roadmap review — draft for \(reviewDay)", date: b.today(112),
               text: """
               Thanks Priya — this reads really well.
 
               On onboarding: the milestones are doable if we cut the animated tour from v2 and ship the checklist first. That buys us about two weeks. I've left comments on pages 3 and 4.
 
-              One question: are we presenting the January date for offline mode as firm, or as a target? Worth being explicit on Thursday.
+              One question: are we presenting the \(months[3]) date for offline mode as firm, or as a target? Worth being explicit on \(reviewDay).
 
               Alex
               """, parent: "q4-roadmap.1")
         b.add("q4-roadmap.3", from: marcus, to: [priya, me],
-              subject: "Re: Q4 roadmap review — draft for Thursday", date: b.today(64),
+              subject: "Re: \(quarter) roadmap review — draft for \(reviewDay)", date: b.today(64),
               text: """
               Agree with Alex on the tour — the checklist gets us 80% of the value for a fraction of the work.
 
-              For search, I can free up Kofi two days a week from November without hurting the API work. That plus one more engineer should be enough for the first milestone.
+              For search, I can free up Kofi two days a week from \(months[1]) without hurting the API work. That plus one more engineer should be enough for the first milestone.
 
               Marcus
               """, parent: "q4-roadmap.2")
         b.add("q4-roadmap.4", from: priya, to: [me], cc: [marcus],
-              subject: "Re: Q4 roadmap review — draft for Thursday", date: b.today(8),
+              subject: "Re: \(quarter) roadmap review — draft for \(reviewDay)", date: b.today(8),
               text: """
               Thanks both — I've folded your notes into v3.
 
-              Let's call January a target, not a commitment. I'll say that up front so nobody walks away with the wrong date.
+              Let's call \(months[3]) a target, not a commitment. I'll say that up front so nobody walks away with the wrong date.
 
-              Thursday at 10:00 in the Larch room still works for everyone? I'll bring printed copies. Alex, could you bring the revised onboarding deck?
+              \(reviewDay) at 10:00 in the Larch room still works for everyone? I'll bring printed copies. Alex, could you bring the revised onboarding deck?
 
               P.
               """, unread: true, parent: "q4-roadmap.3")
@@ -301,15 +306,20 @@ enum DemoContent {
                       "Fare: Economy Standard. Baggage: 1 carry-on + 1 personal item per passenger.",
                   ], accent: (0.04, 0.36, 0.68)))])
 
-        b.add("lease-4b.1", from: marisol, to: [me], subject: "Lease renewal for unit 4B", date: b.daysAgo(3, 10, 15),
+        let leaseDate = b.daysAgo(3, 10, 15)
+        let replyDate = b.yesterday(11, 30)
+        // The fan visit: the coming Friday when it's within the week, else the next workday.
+        var visit = b.weekday(6, atLeast: 2, after: replyDate)
+        if visit.timeIntervalSince(replyDate) > 6 * 86_400 { visit = b.workday(atLeast: 2, after: replyDate) }
+        b.add("lease-4b.1", from: marisol, to: [me], subject: "Lease renewal for unit 4B", date: leaseDate,
               text: """
               Hi Alex,
 
-              Your lease on 4B is up at the end of December, so I wanted to reach out early. We'd love to have you stay.
+              Your lease on 4B is up at the end of \(b.month(2, from: leaseDate)), so I wanted to reach out early. We'd love to have you stay.
 
               For a 12-month renewal the rent would go from $2,150 to $2,210 a month. I can also offer a 6-month term at $2,260 if you'd rather keep things flexible.
 
-              No rush — let me know by mid-November which you prefer and I'll send the paperwork.
+              No rush — let me know by mid-\(b.month(1, from: leaseDate)) which you prefer and I'll send the paperwork.
 
               Best,
               Marisol Vega
@@ -326,11 +336,11 @@ enum DemoContent {
               Thanks,
               Alex
               """, parent: "lease-4b.1")
-        b.add("lease-4b.3", from: marisol, to: [me], subject: "Re: Lease renewal for unit 4B", date: b.yesterday(11, 30),
+        b.add("lease-4b.3", from: marisol, to: [me], subject: "Re: Lease renewal for unit 4B", date: replyDate,
               text: """
               Wonderful, so glad you're staying!
 
-              I've put you down for 12 months at $2,210. Our maintenance tech, Luis, can come by Friday between 9 and 11 for the fan — does that work? If not, just suggest a time.
+              I've put you down for 12 months at $2,210. Our maintenance tech, Luis, can come by \(b.format(visit, "EEEE")) between 9 and 11 for the fan — does that work? If not, just suggest a time.
 
               I'll email the renewal paperwork next week.
 
@@ -352,8 +362,10 @@ enum DemoContent {
                   DemoBuilder.attachment(3, "lake-overlook.png", "image/png", DemoAssets.landscapePNG(width: 240, height: 160, palette: DemoAssets.lake)),
               ])
 
+        let statementDate = b.yesterday(7, 30)
+        let statementTitle = "Your \(b.month(0, from: statementDate)) statement is ready"
         let statement = DemoHTML.card(
-            brand: "TIDEWELL BANK", accent: "#0f766e", title: "Your October statement is ready",
+            brand: "TIDEWELL BANK", accent: "#0f766e", title: statementTitle,
             preheader: "Your statement for the card ending in 4417 is ready to view.",
             intro: "Hi Alex, your statement for the Tidewell Rewards card ending in 4417 is now available in online banking.",
             details: [.init(heading: "Summary", rows: [
@@ -363,7 +375,7 @@ enum DemoContent {
             action: (title: "View statement", url: "https://tidewellbank.example/statements"),
             outro: "Tidewell Bank will never ask for your password or one-time codes by email.",
             footerLines: ["Tidewell Bank, Member FDIC (fictional). Please don't reply to this email."], unsubscribe: nil)
-        b.add("statement-oct", from: tidewell, to: [me], subject: "Your October statement is ready", date: b.yesterday(7, 30),
+        b.add("statement-oct", from: tidewell, to: [me], subject: statementTitle, date: statementDate,
               text: statement.text, html: statement.html,
               snippet: "Your statement for the Tidewell Rewards card ending in 4417 is now available. Statement balance $1,284.36.",
               bulk: true)
@@ -390,11 +402,16 @@ enum DemoContent {
     private static func addThisWeek(_ b: inout DemoBuilder) {
         let me = b.me
 
-        b.add("offsite.1", from: hannah, to: [me, marcus, priya], subject: "Offsite planning: venue shortlist", date: b.daysAgo(5, 9, 20),
+        // Next month's offsite, on its second Thursday and Friday.
+        let offsitePlanned = b.daysAgo(5, 9, 20)
+        let offsiteMonth = b.month(1, from: offsitePlanned)
+        let offsiteStart = b.weekday(5, number: 2, monthsAfter: 1, from: offsitePlanned)
+        let offsiteDays = "\(offsiteMonth) \(b.format(offsiteStart, "d"))–\(b.format(offsiteStart.addingTimeInterval(86_400), "d"))"
+        b.add("offsite.1", from: hannah, to: [me, marcus, priya], subject: "Offsite planning: venue shortlist", date: offsitePlanned,
               text: """
               Hi all,
 
-              I've narrowed the November offsite down to three venues — all within an hour of the office, all fit 24 people:
+              I've narrowed the \(offsiteMonth) offsite down to three venues — all within an hour of the office, all fit 24 people:
 
               1. Millbrook Lodge — big fireplace room, great food, a bit pricier.
               2. The Foundry Annex — industrial loft, walkable from the train, no outdoor space.
@@ -412,15 +429,16 @@ enum DemoContent {
               text: "Millbrook for me too, Foundry as backup.\n\nIf we go with Millbrook, could we get the smaller breakout room as well? Design would love a space for the workshop on day two.\n\nAlex",
               parent: "offsite.2")
         b.add("offsite.4", from: priya, to: [hannah], cc: [me, marcus], subject: "Re: Offsite planning: venue shortlist", date: b.daysAgo(2, 16, 15),
-              text: "Millbrook it is — sounds unanimous. Hannah, thank you for pulling this together so quickly.\n\nLet's hold November 12–13 and share an agenda draft next week. Alex, yes to the breakout room.\n\nPriya",
+              text: "Millbrook it is — sounds unanimous. Hannah, thank you for pulling this together so quickly.\n\nLet's hold \(offsiteDays) and share an agenda draft next week. Alex, yes to the breakout room.\n\nPriya",
               parent: "offsite.3")
 
         let due = b.daysAhead(30, 9, 0)
-        b.add("invoice-1043", from: ingrid, to: [me], subject: "Invoice INV-2026-1043 — Fieldstone brand refresh (phase 2)", date: b.daysAgo(2, 10, 40),
+        let invoice = "INV-\(b.format(b.daysAgo(2, 10, 40), "yyyy"))-1043"
+        b.add("invoice-1043", from: ingrid, to: [me], subject: "Invoice \(invoice) — Fieldstone brand refresh (phase 2)", date: b.daysAgo(2, 10, 40),
               text: """
               Hi Alex,
 
-              Please find attached invoice INV-2026-1043 for phase 2 of the Fieldstone brand refresh (illustration system and icon set).
+              Please find attached invoice \(invoice) for phase 2 of the Fieldstone brand refresh (illustration system and icon set).
 
               Amount due: $8,400.00
               Due date: \(b.format(due, "MMMM d, yyyy"))
@@ -431,8 +449,8 @@ enum DemoContent {
               Ingrid Ostrander
               Studio Ostrander
               """, unread: true,
-              attachments: [DemoBuilder.attachment(2, "INV-2026-1043.pdf", "application/pdf", DemoAssets.pdf(
-                  title: "Invoice INV-2026-1043", subtitle: "Studio Ostrander · Bill to: Fieldstone, attn. Alex Rivera",
+              attachments: [DemoBuilder.attachment(2, "\(invoice).pdf", "application/pdf", DemoAssets.pdf(
+                  title: "Invoice \(invoice)", subtitle: "Studio Ostrander · Bill to: Fieldstone, attn. Alex Rivera",
                   lines: [
                       "Issued: \(b.format(b.daysAgo(2, 10, 40), "MMMM d, yyyy"))      Due: \(b.format(due, "MMMM d, yyyy"))", "",
                       "# Services", "Illustration system (12 spot illustrations)            $5,200.00",
@@ -458,11 +476,13 @@ enum DemoContent {
               text: notes.text, html: notes.html, snippet: "Line height, measure and the case for a little more white space. This week: three small typographic habits that make long reading easier.",
               bulk: true, unsubscribe: "https://fieldnotesweekly.example/unsubscribe")
 
-        b.add("halden-letter.1", folder: "Sent", from: me, to: [elena], subject: "Recommendation letter for the Halden Fellowship", date: b.daysAgo(6, 20, 10),
+        let asked = b.daysAgo(6, 20, 10)
+        let deadline = "\(b.month(2, from: asked)) 1"
+        b.add("halden-letter.1", folder: "Sent", from: me, to: [elena], subject: "Recommendation letter for the Halden Fellowship", date: asked,
               text: """
               Dear Professor Duarte,
 
-              I hope the semester is treating you well! I'm applying for the Halden Design Fellowship this winter, and I'd be honoured if you would write a letter of recommendation. The deadline is December 1.
+              I hope the semester is treating you well! I'm applying for the Halden Design Fellowship this \(b.season(of: b.firstOfMonth(2, from: asked))), and I'd be honoured if you would write a letter of recommendation. The deadline is \(deadline).
 
               I can send my statement of purpose, CV and the wayfinding project we did in your studio course, if that would help.
 
@@ -475,7 +495,7 @@ enum DemoContent {
 
               Of course — I'd be delighted. Your wayfinding project is still one of my favourite examples to show students.
 
-              Please send your statement and CV when they're ready, plus a short note on what you'd like me to emphasise. I'll have the letter in well before December 1.
+              Please send your statement and CV when they're ready, plus a short note on what you'd like me to emphasise. I'll have the letter in well before \(deadline).
 
               All best,
               Elena Duarte
@@ -532,7 +552,7 @@ enum DemoContent {
 
               Episodes are about 45 minutes, recorded remotely, and very conversational. We'd talk about your path into design, how Fieldstone runs critiques, and whatever you're excited about lately.
 
-              We're booking for November and December. Any interest?
+              We're booking for \(b.month(1, from: b.daysAgo(3, 13, 5))) and \(b.month(2, from: b.daysAgo(3, 13, 5))). Any interest?
 
               Cheers,
               Dev Mehta
@@ -545,7 +565,7 @@ enum DemoContent {
 
               • Lost cat: Pepper, grey tabby, last seen near 34th and Alder. Friendly, answers to treats.
               • Free piano: an upright in good shape, you haul. First come, first served.
-              • Block party: Saturday the 31st, 2–6pm on Birch Street. Bring a dish to share.
+              • Block party: Saturday the \(b.dayOrdinal(b.weekday(7, atLeast: 10, after: b.daysAgo(5, 8, 0)))), 2–6pm on Birch Street. Bring a dish to share.
 
               See all 14 posts on Neighborly.
               """, bulk: true, unsubscribe: "https://neighborly.example/settings/email")
@@ -560,7 +580,7 @@ enum DemoContent {
               Longest run: 14.6 km
               Average pace: 5:21 /km
 
-              Keep it going this month — you're 16 km from your autumn goal.
+              Keep it going this month — you're 16 km from your \(b.season(of: b.daysAgo(6, 7, 45))) goal.
               """, bulk: true, unsubscribe: "https://stridewise.example/email-settings")
 
         b.add("atlas-api.1", from: lena, to: [me], subject: "Quick question about the Atlas API", date: b.daysAgo(4, 15, 40),
@@ -589,7 +609,7 @@ enum DemoContent {
             intro: "Thanks to everyone who joined on Thursday. Here's the short version, with links to the slides and recording on the intranet.",
             heroImagePNG: nil, heroAlt: "",
             sections: [
-                .init(heading: "Highlights", body: "• Atlas crossed 40,000 weekly active teams.\n• Onboarding v2 is the top product priority for Q4.\n• The November offsite is confirmed at Millbrook Lodge."),
+                .init(heading: "Highlights", body: "• Atlas crossed 40,000 weekly active teams.\n• Onboarding v2 is the top product priority for \(b.quarter(of: b.now)).\n• The \(offsiteMonth) offsite is confirmed at Millbrook Lodge."),
                 .init(heading: "Your questions", body: "We ran out of time for a few questions about hybrid work and the new expense policy. Hannah has answered all of them in the FAQ — look for the \"All-hands follow-ups\" page."),
             ],
             signoff: "— Fieldstone Comms",
@@ -608,13 +628,16 @@ enum DemoContent {
         b.add("plant-swap", from: june, to: [me], subject: "Plant swap this Sunday 🌿", date: b.daysAgo(7, 17, 50),
               text: "Hi neighbours!\n\nWe're doing a plant swap on the community garden porch this Sunday from 10 to noon. Bring cuttings, seedlings, pots you don't need — or just come for coffee. I'll have far too many pothos starts.\n\nJune (#2B)")
 
-        b.add("book-club-nov", from: grace, to: [me, sam, nina], subject: "Book club: November pick 📚", date: b.daysAgo(8, 19, 20),
+        let bookClubDate = b.daysAgo(8, 19, 20)
+        let pickMonth = b.month(1, from: bookClubDate)
+        let meeting = b.weekday(1, number: 3, monthsAfter: 1, from: bookClubDate)
+        b.add("book-club-nov", from: grace, to: [me, sam, nina], subject: "Book club: \(pickMonth) pick 📚", date: bookClubDate,
               text: """
               Hi book people,
 
-              Thanks for a lovely discussion last week! For November we're reading Small Hours at the Saltwater Inn by Ida Marchetti — it's short, so no excuses.
+              Thanks for a lovely discussion last week! For \(pickMonth) we're reading Small Hours at the Saltwater Inn by Ida Marchetti — it's short, so no excuses.
 
-              We'll meet Sunday the 15th at my place, 4pm. I'll make the chai; someone else please bring snacks.
+              We'll meet Sunday the \(b.dayOrdinal(meeting)) at my place, 4pm. I'll make the chai; someone else please bring snacks.
 
               Grace
               """)
@@ -646,15 +669,17 @@ enum DemoContent {
               text: margin111.text, html: margin111.html, snippet: "Innovation tokens, and why you should spend them on your product, not your stack.",
               bulk: true, unsubscribe: "https://themargin.example/unsubscribe/af31c9")
 
-        b.add("northstar-accepted", from: northstar, to: [me], subject: "Your talk was accepted 🎉", date: b.daysAgo(10, 16, 0),
+        let accepted = b.daysAgo(10, 16, 0)
+        let summitYear = (Int(b.format(accepted, "yyyy")) ?? 2026) + 1
+        b.add("northstar-accepted", from: northstar, to: [me], subject: "Your talk was accepted 🎉", date: accepted,
               text: """
               Hi Alex,
 
-              Congratulations! Your talk, "Designing for the second week", has been accepted for Northstar Dev Summit 2027 in Portland.
+              Congratulations! Your talk, "Designing for the second week", has been accepted for Northstar Dev Summit \(summitYear) in Portland.
 
               Next steps:
               1. Confirm your slot by replying to this email (we've pencilled you in for day 2 at 11:30).
-              2. Send a headshot and a two-sentence bio by November 30.
+              2. Send a headshot and a two-sentence bio by \(b.format(b.thirtieth(monthAfter: accepted), "MMMM d")).
               3. Book travel — speakers get two hotel nights at the Riverside.
 
               We're thrilled to have you.
@@ -662,13 +687,14 @@ enum DemoContent {
               The Northstar programme committee
               """, flagged: true)
 
+        let cookingSeason = b.season(of: b.daysAgo(11, 9, 0))
         let saltgrassIssue = DemoHTML.newsletter(
             brand: "Saltgrass Kitchen", accent: "#b45309", background: "#faf3e8", kicker: "The Weekend Table",
-            title: "Three one-pan autumn dinners",
+            title: "Three one-pan \(cookingSeason) dinners",
             preheader: "Roast squash with chickpeas, a sheet-pan gnocchi and the easiest apple crumble.",
             intro: "Fewer dishes, more evening. This week's recipes each use one pan and about forty minutes, most of them hands-off.",
             heroImagePNG: DemoAssets.landscapePNG(width: 240, height: 100, palette: DemoAssets.meadow),
-            heroAlt: "Illustration: golden autumn hills",
+            heroAlt: "Illustration: golden \(cookingSeason) hills",
             sections: [
                 .init(heading: "Roast squash, chickpeas and crispy sage", body: "Toss cubed squash and chickpeas with olive oil, smoked paprika and salt. Roast at 220°C for 30 minutes, add sage leaves for the last five, and finish with a spoonful of yoghurt."),
                 .init(heading: "Sheet-pan gnocchi with tomatoes", body: "Shop-bought gnocchi goes straight onto the tray with cherry tomatoes, garlic and a red onion. Twenty-five minutes later: crisp edges, jammy tomatoes, dinner."),
@@ -676,7 +702,7 @@ enum DemoContent {
             ],
             signoff: "Happy cooking,\nAnnika at Saltgrass",
             footerLines: ["Saltgrass Kitchen · recipes for ordinary weeknights"], unsubscribe: "https://saltgrass.example/unsubscribe")
-        b.add("saltgrass-weekend", from: saltgrass, to: [me], subject: "The Weekend Table: three one-pan autumn dinners", date: b.daysAgo(11, 9, 0),
+        b.add("saltgrass-weekend", from: saltgrass, to: [me], subject: "The Weekend Table: three one-pan \(cookingSeason) dinners", date: b.daysAgo(11, 9, 0),
               text: saltgrassIssue.text, html: saltgrassIssue.html, snippet: "Roast squash with chickpeas, a sheet-pan gnocchi and the easiest apple crumble.",
               bulk: true, unsubscribe: "https://saltgrass.example/unsubscribe")
 
@@ -713,25 +739,32 @@ enum DemoContent {
               text: "Perfect, that's what I hoped you'd say. I've added the screenshot requirement and credited you in the changelog. 😄\n\nShipping v2 on Monday.\n\nM.",
               parent: "review-guidelines.2")
 
-        b.add("clearwater-autopay", from: clearwater, to: [me], subject: "Autopay scheduled for your October bill", date: b.daysAgo(16, 6, 0),
-              text: "Hi Alex,\n\nYour October bill of $96.40 will be paid automatically on \(b.format(b.daysAgo(9, 9, 0), "MMMM d")) from your account ending in 0381.\n\nUsage this period: 412 kWh electricity, 3,900 gallons water.\n\nClearwater Utilities",
+        let billMonth = b.month(0, from: b.daysAgo(16, 6, 0))
+        b.add("clearwater-autopay", from: clearwater, to: [me], subject: "Autopay scheduled for your \(billMonth) bill", date: b.daysAgo(16, 6, 0),
+              text: "Hi Alex,\n\nYour \(billMonth) bill of $96.40 will be paid automatically on \(b.format(b.daysAgo(9, 9, 0), "MMMM d")) from your account ending in 0381.\n\nUsage this period: 412 kWh electricity, 3,900 gallons water.\n\nClearwater Utilities",
               bulk: true)
 
-        b.add("food-bank-nov", from: omar, to: [me], subject: "Volunteer schedule for November", date: b.daysAgo(18, 18, 30),
+        let rota = b.daysAgo(18, 18, 30)
+        let rotaMonth = b.month(1, from: rota)
+        let shifts = [1, 3].map { b.dayOrdinal(b.weekday(7, number: $0, monthsAfter: 1, from: rota)) }
+        let deliveryRun = b.dayOrdinal(b.weekday(4, number: 4, monthsAfter: 1, from: rota))
+        let holiday = [11, 12].contains(b.calendar.component(.month, from: b.firstOfMonth(1, from: rota))) ? "holiday " : ""
+        b.add("food-bank-nov", from: omar, to: [me], subject: "Volunteer schedule for \(rotaMonth)", date: rota,
               text: """
               Hi volunteers,
 
-              The November schedule is up! You're down for Saturday morning shifts (9–12) on the 7th and 21st, packing produce boxes. If either date doesn't work, reply and I'll find a swap.
+              The \(rotaMonth) schedule is up! You're down for Saturday morning shifts (9–12) on the \(shifts[0]) and \(shifts[1]), packing produce boxes. If either date doesn't work, reply and I'll find a swap.
 
-              We're also short two drivers for the holiday delivery run on the 25th — if you have a car and a free afternoon, it would mean a lot.
+              We're also short two drivers for the \(holiday)delivery run on the \(deliveryRun) — if you have a car and a free afternoon, it would mean a lot.
 
               Thank you for everything you do,
               Omar
               Riverbend Food Bank
               """)
 
-        b.add("referral-thanks", from: maya, to: [me], subject: "Thanks for the referral!", date: b.daysAgo(19, 11, 10),
-              text: "Hi Alex,\n\nJust wanted to let you know your referral, Rosa Lindgren, accepted our offer for Senior iOS Engineer! She starts on November 30.\n\nThe referral bonus will be in your December paycheck. Thank you for sending such a great candidate our way.\n\nMaya\nPeople Team")
+        let referred = b.daysAgo(19, 11, 10)
+        b.add("referral-thanks", from: maya, to: [me], subject: "Thanks for the referral!", date: referred,
+              text: "Hi Alex,\n\nJust wanted to let you know your referral, Rosa Lindgren, accepted our offer for Senior iOS Engineer! She starts on \(b.format(b.thirtieth(monthAfter: referred), "MMMM d")).\n\nThe referral bonus will be in your \(b.month(2, from: referred)) paycheck. Thank you for sending such a great candidate our way.\n\nMaya\nPeople Team")
 
         let checkIn = b.daysAhead(17, 15, 0)
         let checkOut = b.daysAhead(25, 11, 0)
@@ -754,8 +787,8 @@ enum DemoContent {
               snippet: "Your stay at Casa Azulejo is confirmed. Lisbon · \(b.format(checkIn, "MMM d")) – \(b.format(checkOut, "MMM d")) · 8 nights · Confirmation WS-9921-LX")
 
         b.add("expense-policy", from: hannah, to: [EmailAddress(name: "Everyone at Fieldstone", address: "everyone@fieldstone.example")], cc: [me],
-              subject: "Updated expense policy (effective November 1)", date: b.daysAgo(22, 14, 0),
-              text: "Hi everyone,\n\nQuick heads-up: from November 1, rides under $60 and meals under $25 no longer need a receipt — just a note in the expense tool. Everything else works as before.\n\nThe full policy is on the intranet under People → Expenses. Shout if anything's unclear.\n\nHannah")
+              subject: "Updated expense policy (effective \(b.month(2, from: b.daysAgo(22, 14, 0))) 1)", date: b.daysAgo(22, 14, 0),
+              text: "Hi everyone,\n\nQuick heads-up: from \(b.month(2, from: b.daysAgo(22, 14, 0))) 1, rides under $60 and meals under $25 no longer need a receipt — just a note in the expense tool. Everything else works as before.\n\nThe full policy is on the intranet under People → Expenses. Shout if anything's unclear.\n\nHannah")
 
         b.add("portfolio-feedback", from: jordan, to: [me], subject: "Portfolio review feedback", date: b.daysAgo(25, 16, 20),
               text: """
@@ -802,14 +835,17 @@ enum DemoContent {
               text: "Welcome to the guild, Alex! We meet every other Wednesday for critique and coffee. The first one's an easy one — just come and listen.\n\nJordan")
         b.add("order-hp-47790", folder: "Archive", from: harborPine, to: [me], subject: "Your Harbor & Pine order #HP-47790", date: b.daysAgo(33, 8, 10),
               text: "Thanks for your order! Ridgeline Blend, whole bean, 340 g. Total $21.25. Shipping tomorrow.", bulk: true)
-        b.add("alumni-autumn", folder: "Archive", from: alumni, to: [me], subject: "Westbrook Alumni News — Autumn 2026", date: b.daysAgo(27, 12, 0),
-              text: "Homecoming highlights, a new design studio on the east campus and twelve alumni stories. Read the autumn issue online.",
+        let alumniDate = b.daysAgo(27, 12, 0)
+        let alumniSeason = b.season(of: alumniDate)
+        b.add("alumni-autumn", folder: "Archive", from: alumni, to: [me],
+              subject: "Westbrook Alumni News — \(alumniSeason.prefix(1).uppercased() + alumniSeason.dropFirst()) \(b.format(alumniDate, "yyyy"))", date: alumniDate,
+              text: "Homecoming highlights, a new design studio on the east campus and twelve alumni stories. Read the \(alumniSeason) issue online.",
               bulk: true, unsubscribe: "https://westbrook.example/alumni/unsubscribe")
         b.add("sylvan-tickets", folder: "Archive", from: oldMill, to: [me], subject: "Your tickets: Sylvan Strings Quartet", date: b.daysAgo(44, 19, 0),
               text: "Thank you for your purchase! 2 tickets, row F, seats 7–8. Doors open at 7pm. Show this email at the box office.")
 
         b.add("candle-sale", folder: "Trash", from: wickhaven, to: [me], subject: "Tonight only: 40% off every candle", date: b.daysAgo(2, 18, 0),
-              text: "Our autumn collection is 40% off until midnight. Cedar & Smoke is back in stock.", bulk: true,
+              text: "Our \(b.season(of: b.daysAgo(2, 18, 0))) collection is 40% off until midnight. Cedar & Smoke is back in stock.", bulk: true,
               unsubscribe: "https://wickhaven.example/unsubscribe")
         b.add("stridewise-miss", folder: "Trash", from: stridewise, to: [me], subject: "We miss you! You haven't logged a run in 5 days", date: b.daysAgo(9, 7, 0),
               text: "Even a short run keeps your streak alive. Lace up!", bulk: true, unsubscribe: "https://stridewise.example/email-settings")
@@ -825,8 +861,8 @@ enum DemoContent {
 
         b.add("cloudberry-sep", folder: "Receipts", from: cloudberry, to: [me], subject: "Your receipt from Cloudberry Music", date: b.daysAgo(34, 6, 15),
               text: "Cloudberry Family, monthly — $16.99 + $1.44 tax. Total $18.43. Receipt CB-2209-77102.", bulk: true)
-        b.add("clearwater-sep", folder: "Receipts", from: clearwater, to: [me], subject: "Your September bill is ready", date: b.daysAgo(38, 6, 0),
-              text: "Your September bill is $88.15 and will be paid automatically on the 3rd.", bulk: true)
+        b.add("clearwater-sep", folder: "Receipts", from: clearwater, to: [me], subject: "Your \(b.month(0, from: b.daysAgo(38, 6, 0))) bill is ready", date: b.daysAgo(38, 6, 0),
+              text: "Your \(b.month(0, from: b.daysAgo(38, 6, 0))) bill is $88.15 and will be paid automatically on the 3rd.", bulk: true)
         b.add("kestrel-receipt", folder: "Travel", from: kestrel, to: [me], subject: "Receipt for your purchase: Lisbon round trip", date: b.daysAgo(21, 20, 5),
               text: "Thank you for flying Kestrel Air. 2 passengers, Seattle ⇄ Lisbon. Total charged: $1,486.20. Confirmation XK7Q2M.")
         b.add("rail-portland", folder: "Travel", from: rail, to: [me], subject: "Ticket confirmation: Seattle → Portland", date: b.daysAgo(60, 13, 30),

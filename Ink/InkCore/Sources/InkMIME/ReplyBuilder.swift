@@ -14,7 +14,8 @@ public enum ReplyBuilder {
     ///   In-Reply-To) plus its Message-ID, keeping the last 20. Set for forwards too, so they thread.
     /// - Quote: "On <date>, <name> wrote:" and the original text with "> " (forwards: a
     ///   "Forwarded message" header block and the original text); `quotedHTML` is the original HTML
-    ///   (sanitised) when there is one. Forwards carry the original's attachments.
+    ///   (sanitised) when there is one. Forwards carry the original's attachments, and inline
+    ///   images big enough to be content rather than decoration (the quoted HTML drops `cid:` images).
     /// - `body` is left empty; the caller adds the signature.
     public static func draft(
         replyingTo message: MessageSummary,
@@ -46,7 +47,7 @@ public enum ReplyBuilder {
             var block = forwardHeader(for: message)
             if let original { block += "\n\n" + original }
             quotedText = block
-            attachments = (body?.attachments ?? []).filter { !$0.isInline }.compactMap { attachment in
+            attachments = (body?.attachments ?? []).filter(isForwarded).compactMap { attachment in
                 attachment.data.map { OutgoingAttachment(filename: attachment.filename, mimeType: attachment.mimeType, data: $0) }
             }
         }
@@ -73,6 +74,16 @@ public enum ReplyBuilder {
         )
     }
 
+    /// Smallest inline image a forward carries along. The quoted HTML can't show `cid:` images,
+    /// so a photo pasted into the original (iPhone Mail sends them inline) would otherwise be lost;
+    /// icons, spacers and small signature logos stay behind.
+    static let minimumForwardedInlineBytes = 8 * 1024
+
+    static func isForwarded(_ attachment: Attachment) -> Bool {
+        guard attachment.isInline else { return true }
+        return attachment.mimeType.lowercased().hasPrefix("image/") && (attachment.data?.count ?? 0) >= minimumForwardedInlineBytes
+    }
+
     // MARK: Recipients
 
     /// To and Cc for a reply (see `draft`). `myAddresses` must be lowercased.
@@ -82,8 +93,9 @@ public enum ReplyBuilder {
         let fromMe = !message.from.isEmpty && message.from.allSatisfy(isMine)
         let primary: [EmailAddress]
         if fromMe {
-            // Replying to something I sent: continue the conversation with its recipients.
-            primary = message.to.isEmpty ? message.from : message.to
+            // Replying to something I sent: continue the conversation with its recipients (its Cc
+            // when it had no To).
+            primary = !message.to.isEmpty ? message.to : (!message.cc.isEmpty ? message.cc : message.from)
         } else {
             primary = message.replyTo.isEmpty ? message.from : message.replyTo
         }

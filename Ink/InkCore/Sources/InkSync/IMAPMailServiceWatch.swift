@@ -10,8 +10,8 @@ extension IMAPMailService {
     /// about ten minutes). Yields `.changed` when messages arrive, disappear or change flags (and
     /// after reconnecting, since something may have happened meanwhile).
     ///
-    /// Servers without IDLE, and servers that advertise it but refuse it, are polled with NOOP
-    /// every `Options.pollInterval` instead. Yahoo's and AOL's IDLE doesn't report deletions
+    /// Servers without IDLE, servers that advertise it but refuse it, and servers that end every
+    /// IDLE as soon as it starts are polled with NOOP every `Options.pollInterval` instead. Yahoo's and AOL's IDLE doesn't report deletions
     /// (RESEARCH §3.4), so there IDLE is renewed every `Options.deletionCheckInterval` and each
     /// renewal yields `.changed` for a re-sync.
     ///
@@ -116,8 +116,11 @@ struct IMAPMailServiceWatcher: Sendable {
                                            missesDeletions: Self.idleMissesDeletions(account: connector.account, capabilities: capabilities))
         if !canIdle { log("The server has no IDLE; checking for changes every \(Int(options.pollInterval)) s.") }
         var lastResync = Date()
+        // IDLEs in a row that the server ended as soon as they started.
+        var instantEnds = 0
         while !Task.isCancelled {
             if canIdle {
+                let started = Date()
                 do {
                     try await client.idle(timeout: plan.refresh) { event in
                         if tracker.isChange(event) { continuation.yield(.changed) }
@@ -129,6 +132,18 @@ struct IMAPMailServiceWatcher: Sendable {
                     log("The server refused IDLE (\(error.localizedDescription)); checking for changes every \(Int(options.pollInterval)) s instead.")
                     canIdle = false
                     continue
+                }
+                if !Task.isCancelled, Date().timeIntervalSince(started) < min(1, plan.refresh / 2) {
+                    // Ended by the server at once (a tagged OK without DONE): re-issuing it would
+                    // spin. After a few of those, poll instead.
+                    instantEnds += 1
+                    if instantEnds >= Self.maxInstantIdleEnds {
+                        log("The server ends IDLE as soon as it starts; checking for changes every \(Int(options.pollInterval)) s instead.")
+                        canIdle = false
+                        continue
+                    }
+                } else {
+                    instantEnds = 0
                 }
                 if plan.resyncEachRenewal, !Task.isCancelled { continuation.yield(.changed) }
             } else {
@@ -154,6 +169,9 @@ struct IMAPMailServiceWatcher: Sendable {
 }
 
 extension IMAPMailServiceWatcher {
+    /// IDLEs the server may end at once, in a row, before the watch polls instead.
+    static let maxInstantIdleEnds = 3
+
     /// A NO or BAD answer, as opposed to a dead connection.
     static func isRefusal(_ error: MailError) -> Bool {
         switch error {

@@ -74,6 +74,77 @@ struct DemoBuilder {
         return daysAhead(delta, hour, 0)
     }
 
+    // MARK: Calendar words
+
+    /// The month `offset` months after the month of `date`, e.g. "November".
+    func month(_ offset: Int, from date: Date) -> String {
+        format(firstOfMonth(offset, from: date), "MMMM")
+    }
+
+    /// Midnight on the first day of the month `offset` months after `date`'s month.
+    func firstOfMonth(_ offset: Int, from date: Date) -> Date {
+        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        return calendar.date(byAdding: .month, value: offset, to: start) ?? start
+    }
+
+    /// "Q4" for the quarter `date` is in.
+    func quarter(of date: Date) -> String {
+        "Q\((calendar.component(.month, from: date) - 1) / 3 + 1)"
+    }
+
+    /// "spring", "summer", "autumn" or "winter" (northern hemisphere, by month).
+    func season(of date: Date) -> String {
+        switch calendar.component(.month, from: date) {
+        case 3...5: return "spring"
+        case 6...8: return "summer"
+        case 9...11: return "autumn"
+        default: return "winter"
+        }
+    }
+
+    /// The `number`-th `weekday` (1 = Sunday) of the month `offset` months after `date`'s month.
+    func weekday(_ weekday: Int, number: Int, monthsAfter offset: Int, from date: Date) -> Date {
+        let first = firstOfMonth(offset, from: date)
+        let delta = (weekday - calendar.component(.weekday, from: first) + 7) % 7
+        return calendar.date(byAdding: .day, value: delta + 7 * (number - 1), to: first) ?? first
+    }
+
+    /// The first `weekday` (1 = Sunday) at least `days` days after `date`'s day.
+    func weekday(_ weekday: Int, atLeast days: Int, after date: Date) -> Date {
+        let start = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: date)) ?? date
+        let delta = (weekday - calendar.component(.weekday, from: start) + 7) % 7
+        return calendar.date(byAdding: .day, value: delta, to: start) ?? start
+    }
+
+    /// The first Monday-to-Friday day at least `days` days after `date`'s day.
+    func workday(atLeast days: Int, after date: Date) -> Date {
+        var day = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: date)) ?? date
+        // Weekday numbers are the same in every locale (1 = Sunday, 7 = Saturday); isDateInWeekend isn't.
+        while [1, 7].contains(calendar.component(.weekday, from: day)) { day = calendar.date(byAdding: .day, value: 1, to: day) ?? day }
+        return day
+    }
+
+    /// The 30th of the month after `date`'s, or that month's last day when it's shorter.
+    func thirtieth(monthAfter date: Date) -> Date {
+        let first = firstOfMonth(1, from: date)
+        let length = calendar.range(of: .day, in: .month, for: first)?.count ?? 30
+        return calendar.date(byAdding: .day, value: min(30, length) - 1, to: first) ?? first
+    }
+
+    /// "1st", "2nd", "3rd", "15th", "21st" … for the day of the month of `date`.
+    func dayOrdinal(_ date: Date) -> String {
+        let day = calendar.component(.day, from: date)
+        let suffix: String
+        switch (day % 10, day % 100) {
+        case (_, 11...13): suffix = "th"
+        case (1, _): suffix = "st"
+        case (2, _): suffix = "nd"
+        case (3, _): suffix = "rd"
+        default: suffix = "th"
+        }
+        return "\(day)\(suffix)"
+    }
+
     func format(_ date: Date, _ pattern: String) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -175,7 +246,8 @@ struct DemoBuilder {
     static func snippet(from text: String) -> String {
         var words: [Substring] = []
         var length = 0
-        for line in text.split(separator: "\n") {
+        // `isNewline` also matches "\r\n", a single Character in Swift.
+        for line in text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix(">") || trimmed == "--" { continue }
             if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") { continue }

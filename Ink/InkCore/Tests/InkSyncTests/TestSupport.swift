@@ -94,6 +94,7 @@ actor FakeMailService: MailService {
     private(set) var syncCount = 0
     private(set) var searchQueries: [String] = []
     private var syncDelay: UInt64 = 0
+    private var performDelay: UInt64 = 0
     private var performFailure: MailError?
     private var syncFailure: MailError?
     private var sendFailure: MailError?
@@ -145,6 +146,8 @@ actor FakeMailService: MailService {
     /// Makes `sync` answer with what the server had when it started, `seconds` later.
     func delaySync(_ seconds: Double) { syncDelay = UInt64(seconds * 1_000_000_000) }
     func failSync(_ error: MailError?) { syncFailure = error }
+    /// Makes every `perform` take `seconds` before it changes anything.
+    func delayPerform(_ seconds: Double) { performDelay = UInt64(seconds * 1_000_000_000) }
     func failSend(_ error: MailError?) { sendFailure = error }
     func messages(in path: String) -> [MessageSummary] { contents[path] ?? [] }
 
@@ -215,6 +218,7 @@ actor FakeMailService: MailService {
 
     func perform(_ action: MailAction, on messages: [MessageSummary]) async throws {
         performed.append((action, messages.map(\.id)))
+        if performDelay > 0 { try? await Task.sleep(nanoseconds: performDelay) }
         if let performFailure { throw performFailure }
         let destination: String?
         switch action {

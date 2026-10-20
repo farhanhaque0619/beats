@@ -104,8 +104,13 @@ enum BodySelector {
 
     static func collectAlternative(_ part: MIMEPart, depth: Int) -> Collected {
         let results = part.children.map { collect($0, depth: depth + 1) }
-        let htmlIndex = results.lastIndex { $0.hasHTML }
+        var htmlIndex = results.lastIndex { $0.hasHTML }
         let plainIndex = results.lastIndex { $0.hasPlain && !$0.hasHTML } ?? results.lastIndex { $0.hasPlain }
+        // An HTML rendering with nothing to see (`<div><br></div>`, only a style sheet) must not
+        // win over a plain alternative that has the actual text.
+        if let index = htmlIndex, let plainIndex, plainIndex != index, !hasVisibleHTML(results[index]) {
+            htmlIndex = results.indices.last { $0 != plainIndex && results[$0].hasHTML && hasVisibleHTML(results[$0]) }
+        }
         var result = Collected()
         if htmlIndex != nil || plainIndex != nil {
             var segment = Segment()
@@ -130,6 +135,14 @@ enum BodySelector {
             result.attachments += r.attachments
         }
         return result
+    }
+
+    static func hasVisibleHTML(_ collected: Collected) -> Bool {
+        collected.segments.contains { segment in
+            guard let html = segment.html else { return false }
+            let bytes = Array(html.utf8)
+            return HTMLQuoteFinder.hasVisibleContent(bytes, 0..<bytes.count)
+        }
     }
 
     static func collectRelated(_ part: MIMEPart, depth: Int) -> Collected {

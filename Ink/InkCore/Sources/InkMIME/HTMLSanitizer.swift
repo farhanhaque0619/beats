@@ -84,9 +84,10 @@ enum HTMLSanitizer {
                 if tag.isEnd {
                     // `</br>` is a line break and a stray `</p>` an empty paragraph to a browser;
                     // neither can close anything outside the email.
-                    if name != "br" && name != "p" {
-                        guard let index = open.lastIndex(of: name) else { continue }
+                    if let index = open.lastIndex(of: name) {
                         open.removeSubrange(index...)
+                    } else if name != "br" && name != "p" {
+                        continue
                     }
                     out.append(contentsOf: Array("</\(name)>".utf8))
                     continue
@@ -165,38 +166,47 @@ enum HTMLSanitizer {
         return true
     }
 
+    /// Checked on bytes and scalars, not `Character`s: a combining mark after the scheme's colon
+    /// would hide the prefix from `hasPrefix` (and `contains` behaves differently on Apple and Linux).
     static func isDangerousURL(_ value: String) -> Bool {
-        let compact = String(value.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }).lowercased()
-        return compact.hasPrefix("javascript:") || compact.hasPrefix("vbscript:") || compact.hasPrefix("livescript:")
-            || compact.hasPrefix("data:text/html") || compact.hasPrefix("data:application") || compact.hasPrefix("data:image/svg")
-            || compact.contains(",javascript:") || compact.contains(" javascript:")
+        let compact = String(String.UnicodeScalarView(value.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F })).asciiLowercased
+        for prefix in ["javascript:", "vbscript:", "livescript:", "data:text/html", "data:application", "data:image/svg"] where compact.hasASCIIPrefix(prefix) {
+            return true
+        }
+        return compact.containsASCII(",javascript:")
     }
 
     static func isDangerousCSS(_ value: String) -> Bool {
-        let compact = value.lowercased().filter { !$0.isWhitespace && $0 != "\\" }
-        return compact.contains("expression(") || compact.contains("javascript:") || compact.contains("behavior:")
-            || compact.contains("-moz-binding") || compact.contains("vbscript:")
+        let compact = String(String.UnicodeScalarView(value.unicodeScalars.filter { !$0.properties.isWhitespace && $0 != "\\" }))
+        return ["expression(", "javascript:", "behavior:", "-moz-binding", "vbscript:"].contains { compact.containsASCIICaseInsensitive($0) }
     }
+
+    static let dangerousCSS = ["@import", "expression(", "behavior:", "-moz-binding", "javascript:", "vbscript:", "</"]
 
     /// Neutralises the dangerous parts of a style sheet (expressions, bindings, `@import`).
     static func sanitizeCSS(_ css: String) -> String {
         var s = css
-        for needle in ["@import", "expression(", "behavior:", "-moz-binding", "javascript:", "vbscript:", "</"] where s.lowercased().contains(needle) {
+        for needle in dangerousCSS where s.containsASCIICaseInsensitive(needle) {
             s = replaceCaseInsensitive(s, needle, with: needle == "</" ? "<\\/" : "/*x*/")
         }
         return s
     }
 
+    /// Replaces every ASCII-case-insensitive occurrence of the ASCII `needle`, working on UTF-8
+    /// bytes so the result is the same on every platform.
     static func replaceCaseInsensitive(_ s: String, _ needle: String, with replacement: String) -> String {
-        var out = ""
-        var rest = Substring(s)
-        while let r = rest.range(of: needle, options: .caseInsensitive) {
-            out += rest[..<r.lowerBound]
-            out += replacement
-            rest = rest[r.upperBound...]
+        let b = Array(s.utf8)
+        let n = Array(needle.asciiLowercased.utf8)
+        var out: [UInt8] = []
+        out.reserveCapacity(b.count)
+        var from = 0
+        while let i = b.firstRangeCaseInsensitive(of: n, from: from, to: b.count) {
+            out.append(contentsOf: b[from..<i])
+            out.append(contentsOf: Array(replacement.utf8))
+            from = i + n.count
         }
-        out += rest
-        return out
+        out.append(contentsOf: b[from...])
+        return String(decoding: out, as: UTF8.self)
     }
 
     /// `<body bgcolor text background style>` as CSS for the wrapper element.
@@ -211,7 +221,8 @@ enum HTMLSanitizer {
             case "text":
                 if let c = cssColor(value) { css.append("color: \(c)") }
             case "background":
-                if !isDangerousURL(value), !value.contains(where: { "'\"()\\\n\r".contains($0) }) {
+                // Scalars, not Characters: "\r\n" is one Character and would slip past a "\n" check.
+                if !isDangerousURL(value), !value.unicodeScalars.contains(where: { "'\"()\\\n\r".unicodeScalars.contains($0) }) {
                     css.append("background-image: url('\(value)')")
                 }
             case "style":

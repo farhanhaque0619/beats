@@ -150,7 +150,9 @@ public enum MessageBuilder {
         guard let rawName = address.name else { return addr }
         let name = sanitizeHeaderText(rawName).collapsingWhitespace
         guard !name.isEmpty, name != addr else { return addr }
-        if EncodedWord.needsEncoding(name) {
+        // A word too long to fold onto a 998-octet line is split into encoded words instead.
+        let tooLong = name.split(separator: " ").contains { $0.utf8.count > 900 }
+        if tooLong || EncodedWord.needsEncoding(name) {
             return EncodedWord.encode(name, force: true, maxWordLength: 64) + " <\(addr)>"
         }
         let specials = CharacterSet(charactersIn: "()<>[]:;@\\,.\"")

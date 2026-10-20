@@ -820,7 +820,9 @@ final class MailStoreTests: XCTestCase {
         let reply = store.draft(replyingTo: latest, mode: .reply, body: body)
         XCTAssertEqual(reply.to.map(\.address), ["priya@fieldstone.example"])
         XCTAssertTrue(reply.cc.isEmpty)
-        XCTAssertEqual(reply.subject, "Re: Q4 roadmap review — draft for Thursday", "no Re: Re:")
+        // The review day follows the calendar (and the machine's time zone): "draft for Thursday" here.
+        XCTAssertTrue(latest.subject.hasPrefix("Re: Q4 roadmap review — draft for "), latest.subject)
+        XCTAssertEqual(reply.subject, latest.subject, "no Re: Re:")
         XCTAssertEqual(reply.inReplyTo, latest.messageID)
         XCTAssertEqual(reply.references.last, latest.messageID)
         XCTAssertEqual(reply.references.count, 4)
@@ -838,7 +840,7 @@ final class MailStoreTests: XCTestCase {
         let forward = store.draft(replyingTo: latest, mode: .forward, body: body)
         XCTAssertTrue(forward.to.isEmpty)
         XCTAssertTrue(forward.subject.hasPrefix("Fwd: "), forward.subject)
-        XCTAssertTrue(forward.subject.hasSuffix("Q4 roadmap review — draft for Thursday"))
+        XCTAssertTrue(forward.subject.hasSuffix(latest.normalizedSubject))
         XCTAssertFalse(forward.subject.hasPrefix("Fwd: Fwd:"))
 
         account.signature = "-- \nA."

@@ -18,6 +18,15 @@ final class MailCorrectnessReviewTests: XCTestCase {
         XCTAssertEqual(Snippet.make(plain: "\u{034F}\u{200C}\u{200B}", html: "<p>From HTML</p>"), "From HTML")
     }
 
+    func testSnippetSkipsHTMLClientBoilerplateInTextAlternative() {
+        let plain = "This message was sent in HTML. Please use an HTML-capable email client to view it.\n\nhttps://news.example.com/view/123"
+        XCTAssertEqual(Snippet.make(plain: plain, html: "<p>Autumn deals are here</p>"), "Autumn deals are here")
+        XCTAssertEqual(Snippet.make(plain: "Your email client does not support HTML messages.", html: "<p>Hello</p>"), "Hello")
+        XCTAssertEqual(Snippet.make(plain: "This is the plain text version of our newsletter.\nBig news today", html: nil), "Big news today")
+        // Typographic rules are separators too.
+        XCTAssertEqual(Snippet.make(plain: "————————\n━━━━━━━━\n═══ ═══\nWeekly notes", html: nil), "Weekly notes")
+    }
+
     func testSnippetKeepsMeaningfulJoiners() {
         // ZWNJ inside a Persian word and ZWJ inside an emoji sequence are part of the text.
         XCTAssertEqual(Snippet.make(plain: "می\u{200C}خواهم", html: nil), "می\u{200C}خواهم")
@@ -38,6 +47,24 @@ final class MailCorrectnessReviewTests: XCTestCase {
         XCTAssertEqual(HTMLText.toPlainText("<p>a</p><!--><p>visible</p><!-- c --><p>b</p>"), "a\n\nvisible\n\nb")
         // Outlook's "downlevel-revealed" pattern still works.
         XCTAssertEqual(HTMLText.toPlainText("<!--[if !mso]><!--><p>Web</p><!--<![endif]--><!--[if mso]><p>Outlook</p><![endif]-->"), "Web")
+    }
+
+    // MARK: Charsets
+
+    func testUTF8LabelledAsLatin1IsReadAsUTF8() {
+        // PHP mail() and web forms send UTF-8 bodies labelled ISO-8859-1.
+        let m = MIMEParser.parse(Raw.bytes("""
+        Subject: =?ISO-8859-1?Q?R=C3=A9servation_confirm=C3=A9e?=
+        Content-Type: text/plain; charset=ISO-8859-1
+        Content-Transfer-Encoding: 8bit
+
+        """, Array("Votre réservation est confirmée – merci !".utf8)))
+        XCTAssertEqual(m.subject, "Réservation confirmée")
+        XCTAssertEqual(m.plainText, "Votre réservation est confirmée – merci !")
+        // Real Latin-1 / Windows-1252 is unaffected, including bytes that only look like a lead byte.
+        XCTAssertEqual(Charset.decode(Data([0x52, 0xE9, 0x73, 0x75, 0x6D, 0xE9]), charset: "iso-8859-1"), "Résumé")
+        XCTAssertEqual(Charset.decode(Data([0x93, 0x48, 0x69, 0x94, 0x20, 0xC3]), charset: "windows-1252"), "\u{201C}Hi\u{201D} Ã")
+        XCTAssertEqual(Charset.decode(Data([0xA4, 0x31, 0x30]), charset: "iso-8859-15"), "€10")
     }
 
     // MARK: Attachments
@@ -184,6 +211,39 @@ final class MailCorrectnessReviewTests: XCTestCase {
         XCTAssertEqual(m.attachments.map(\.id), ["2.2"])
     }
 
+    func testEmptyHTMLAlternativeDoesNotHideThePlainText() {
+        let m = MIMEParser.parse(Raw.data("""
+        Content-Type: multipart/alternative; boundary=a
+
+        --a
+        Content-Type: text/plain; charset=utf-8
+
+        The real text.
+        --a
+        Content-Type: text/html; charset=utf-8
+
+        <html><head><style>p{}</style><title>x</title></head><body><div><br>&nbsp;</div><!-- nothing --></body></html>
+        --a--
+        """))
+        XCTAssertEqual(m.plainText, "The real text.")
+        XCTAssertNil(m.html)
+        // An HTML part that is only an image still counts.
+        let image = MIMEParser.parse(Raw.data("""
+        Content-Type: multipart/alternative; boundary=a
+
+        --a
+        Content-Type: text/plain
+
+        [image: banner]
+        --a
+        Content-Type: text/html
+
+        <table><tr><td><img src="https://example.com/banner.png"></td></tr></table>
+        --a--
+        """))
+        XCTAssertEqual(image.html, "<table><tr><td><img src=\"https://example.com/banner.png\"></td></tr></table>")
+    }
+
     // MARK: Reader document
 
     func testStrayEndTagsCannotCloseInksWrapper() {
@@ -214,6 +274,39 @@ final class MailCorrectnessReviewTests: XCTestCase {
                                       replyMode: .reply)
         let html = MessageBuilder.htmlBody(for: message)
         XCTAssertTrue(html.contains("<p>Hello</p><p>Still quoted</p>\n</blockquote>"), html)
+    }
+
+    func testInlineAnswersInAGmailQuoteAreNotCollapsed() {
+        // Gmail inline replies put the answers inside div.gmail_quote, between pieces of the quote.
+        let html = """
+        <div dir="ltr">Answers inline.</div><br><div class="gmail_quote"><div dir="ltr" class="gmail_attr">On Mon, Oct 19, 2026 at 9:00 AM Ada &lt;ada@example.com&gt; wrote:<br></div><blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex"><div>Can you make Tuesday?</div></blockquote><div>Yes, Tuesday works.</div><blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex"><div>Bring the slides?</div></blockquote><div>Will do.</div></div>
+        """
+        let doc = EmailHTMLDocument.build(html: html, plainText: nil, options: .init())
+        XCTAssertFalse(doc.contains("<details"), "the answers would hide behind •••")
+        XCTAssertTrue(doc.contains("Yes, Tuesday works."))
+        // An ordinary trailing Gmail quote still collapses, and the snippet still drops the quote.
+        let plainReply = "<div dir=\"ltr\">Sounds good.</div><br><div class=\"gmail_quote\"><div dir=\"ltr\" class=\"gmail_attr\">On Mon, Ada wrote:<br></div><blockquote class=\"gmail_quote\"><div>Lunch?</div></blockquote></div>"
+        XCTAssertTrue(EmailHTMLDocument.build(html: plainReply, plainText: nil, options: .init()).contains("<details class=\"ink-quote\">"))
+        XCTAssertEqual(Snippet.make(plain: nil, html: html), "Answers inline.")
+    }
+
+    func testInlineAnswersInPlainTextAreNotCollapsed() {
+        let text = """
+        Answers inline.
+
+        On Mon, Oct 19, 2026 at 9:00 AM Ada <ada@example.com> wrote:
+        > Can you make Tuesday?
+        Yes, Tuesday works.
+        > Bring the slides?
+        Will do.
+        """
+        let doc = EmailHTMLDocument.build(html: nil, plainText: text, options: .init())
+        XCTAssertFalse(doc.contains("<details"), "the answers would hide behind •••")
+        XCTAssertTrue(doc.contains("Yes, Tuesday works."))
+        XCTAssertEqual(Snippet.make(plain: text, html: nil), "Answers inline.")
+        // A quote followed only by a list footer still collapses.
+        let footer = "Thanks!\n\nOn Mon, Ada wrote:\n> Lunch?\n> Noon?\n\n_______________________\nteam mailing list\nteam@example.com"
+        XCTAssertTrue(EmailHTMLDocument.build(html: nil, plainText: footer, options: .init()).contains("<details class=\"ink-quote\">"))
     }
 
     func testPlaintextElementCannotSwallowTheDocument() {
@@ -257,7 +350,85 @@ final class MailCorrectnessReviewTests: XCTestCase {
         XCTAssertFalse(doc.contains("img-src cid: data: https:"))
     }
 
+    func testChecksDoNotDependOnGraphemeClusters() {
+        // "\u{301}" glues onto the ":" before it and "\u{600}" (a prepended mark) onto the
+        // character after it, so Character-based hasPrefix/contains miss the match; on Apple
+        // platforms String.contains(String) is Character-based, on Linux it isn't.
+        XCTAssertTrue(HTMLSanitizer.isDangerousURL("javascript:\u{301}alert(1)"))
+        XCTAssertTrue(HTMLSanitizer.isDangerousURL("JaVa\tScRiPt\u{0}:x"))
+        XCTAssertFalse(HTMLSanitizer.isDangerousURL("https://example.com/javascript:"))
+        XCTAssertTrue(HTMLSanitizer.isDangerousCSS("width: expression(\u{301}alert(1))"))
+        XCTAssertEqual(HTMLSanitizer.sanitizeCSS("\u{600}@IMPORT url(x.css); a{b:c}</\u{301}style>"), "\u{600}/*x*/ url(x.css); a{b:c}<\\/\u{301}style>")
+        XCTAssertEqual(EncodedWord.decode("\u{600}=?utf-8?Q?caf=C3=A9?="), "\u{600}café")
+        XCTAssertEqual(AddressParser.parse("\"=?utf-8?Q?Zo=C3=AB?=\u{301}\" <zoe@example.com>")?.address, "zoe@example.com")
+        let ct = ContentType.parse("application/pdf; name=\"\u{600}=?utf-8?Q?r=C3=A9sum=C3=A9?=.pdf\"")
+        XCTAssertEqual(ct.parameters["name"], "\u{600}résumé.pdf")
+        // A CRLF inside <body background> can't break out of the url('…') it is placed in.
+        XCTAssertEqual(HTMLSanitizer.bodyAttributesCSS([HTMLAttribute(name: "background", value: "a\r\nb.png", valueRange: nil, range: 0..<0)]), "")
+    }
+
+    func testRemoteImagesCountBackgroundsAndSourceSets() {
+        // The reader only offers "Load images" when this is above zero.
+        XCTAssertEqual(EmailHTMLDocument.countRemoteImages("<td background=\"https://cdn.example.com/hero.jpg\">Sale</td>"), 1)
+        XCTAssertEqual(EmailHTMLDocument.countRemoteImages("<div style=\"background-image: url( 'https://cdn.example.com/a.png' )\">x</div>"), 1)
+        XCTAssertEqual(EmailHTMLDocument.countRemoteImages("<style>.hero{background:URL(//cdn.example.com/b.png)}</style><p class=hero>x</p>"), 1)
+        XCTAssertEqual(EmailHTMLDocument.countRemoteImages("<picture><source srcset=\"https://a.example/x.webp 1x, https://a.example/x2.webp 2x\"><img srcset=\"https://a.example/y.png\" alt=\"\"></picture>"), 2)
+        XCTAssertEqual(EmailHTMLDocument.countRemoteImages("<video poster=\"http://a.example/p.jpg\"></video><svg><image href=\"https://a.example/i.png\"/></svg>"), 2)
+        // One element is one image, and local sources don't count.
+        XCTAssertEqual(EmailHTMLDocument.countRemoteImages("<img src=\"https://a.example/1.png\" srcset=\"https://a.example/2.png 2x\">"), 1)
+        XCTAssertEqual(EmailHTMLDocument.countRemoteImages("<img src=cid:a srcset=\"data:image/png;base64,AA 2x\"><div style=\"background:url(cid:b)\"></div><a href=\"https://x.example\">x</a>"), 0)
+        // A CRLF before a candidate's URL ("\r\n" is one Character) still separates it.
+        XCTAssertEqual(EmailHTMLDocument.countRemoteImages("<img srcset=\"a.png 1x,\r\n https://a.example/b.png 2x\">"), 1)
+        XCTAssertEqual(EmailHTMLDocument.srcsetURLs("a.png\r\n1x,\r\n\thttps://a.example/b.png\r\n2x"), ["a.png", "https://a.example/b.png"])
+    }
+
+    func testBackgroundShorthandSplitAcrossCRLFIsStillPlain() {
+        // "\r\n" is one Character: the shorthand's tokens must still split there.
+        XCTAssertFalse(EmailHTMLDocument.cssHasBackground("td {\r\n  background: white\r\nno-repeat\r\n}"))
+        XCTAssertTrue(EmailHTMLDocument.cssHasBackground("td {\r\n  background: white\r\n#202124\r\n}"))
+    }
+
     // MARK: Outgoing
+
+    func testReplyToOwnMessageWithOnlyCcGoesToTheCc() {
+        let account = AccountConfig(id: "acc", provider: .fastmail, displayName: "Me", emailAddress: "me@example.org",
+                                    imap: ServerConfig(host: "i", port: 993, security: .tls, username: "me"),
+                                    smtp: ServerConfig(host: "s", port: 465, security: .tls, username: "me"))
+        let sent = MessageSummary(accountID: "acc", mailboxPath: "Sent", uid: 1, uidValidity: 1, messageID: "orig@example.org", subject: "Plans",
+                                  from: [EmailAddress(address: "Me@Example.org")], replyTo: [], to: [],
+                                  cc: [EmailAddress(address: "bob@example.com"), EmailAddress(address: "carol@example.com")], date: Date.utc(2026, 10, 1))
+        let all = ReplyBuilder.draft(replyingTo: sent, body: nil, mode: .replyAll, from: account, myAddresses: [])
+        XCTAssertEqual(all.to.map(\.address), ["bob@example.com", "carol@example.com"])
+        XCTAssertTrue(all.cc.isEmpty)
+        let one = ReplyBuilder.draft(replyingTo: sent, body: nil, mode: .reply, from: account, myAddresses: [])
+        XCTAssertEqual(one.to.map(\.address), ["bob@example.com", "carol@example.com"])
+        // Bcc-only: nobody else is known, so the reply goes to me.
+        var bccOnly = sent
+        bccOnly.cc = []
+        XCTAssertEqual(ReplyBuilder.draft(replyingTo: bccOnly, body: nil, mode: .replyAll, from: account, myAddresses: []).to.map(\.address), ["Me@Example.org"])
+    }
+
+    func testForwardKeepsInlinePhotosButNotIcons() {
+        // iPhone Mail pastes photos inline (cid:); the forwarded HTML can't carry cid: images, so the
+        // photo must travel as an attachment or it is silently lost.
+        let account = AccountConfig(id: "acc", provider: .fastmail, displayName: "Me", emailAddress: "me@example.org",
+                                    imap: ServerConfig(host: "i", port: 993, security: .tls, username: "me"),
+                                    smtp: ServerConfig(host: "s", port: 465, security: .tls, username: "me"))
+        let original = MessageSummary(accountID: "acc", mailboxPath: "INBOX", uid: 1, uidValidity: 1, messageID: "p@example.com", subject: "Look",
+                                      from: [EmailAddress(address: "ada@example.com")], replyTo: [], to: [EmailAddress(address: "me@example.org")],
+                                      cc: [], date: Date.utc(2026, 10, 1))
+        let photo = Data(repeating: 0xFF, count: 200_000)
+        let body = MessageBody(messageID: "m", plainText: "Look at this", html: "<p>Look at this</p><img src=\"cid:photo\"><img src=\"cid:icon\">", attachments: [
+            Attachment(id: "2", filename: "IMG_0042.jpeg", mimeType: "image/jpeg", size: photo.count, contentID: "photo", isInline: true, data: photo),
+            Attachment(id: "3", filename: "icon.png", mimeType: "image/png", size: 900, contentID: "icon", isInline: true, data: Data(count: 900)),
+        ])
+        let forward = ReplyBuilder.draft(replyingTo: original, body: body, mode: .forward, from: account, myAddresses: [])
+        XCTAssertEqual(forward.attachments.map(\.filename), ["IMG_0042.jpeg"])
+        XCTAssertEqual(forward.attachments.first?.data, photo)
+        XCTAssertFalse(forward.quotedHTML?.contains("cid:") ?? false)
+        // Replies never carry attachments.
+        XCTAssertTrue(ReplyBuilder.draft(replyingTo: original, body: body, mode: .reply, from: account, myAddresses: []).attachments.isEmpty)
+    }
 
     func testHeaderInjectionThroughEveryField() {
         var message = OutgoingMessage(accountID: "a",
@@ -270,7 +441,8 @@ final class MailCorrectnessReviewTests: XCTestCase {
         message.attachments = [OutgoingAttachment(filename: "a\r\nX-File: 1.pdf", mimeType: "application/pdf\r\nX-Type: 1", data: Data("x".utf8))]
         let (data, _) = MessageBuilder.build(message)
         assertWireFormat(data)
-        let lines = String(decoding: data, as: UTF8.self).components(separatedBy: "\r\n")
+        // Split on bytes: "\r\n" is a single Character, so String splitting differs across platforms.
+        let lines = [UInt8](data).split(separator: 0x0A).map { String(decoding: $0.filter { $0 != 0x0D }, as: UTF8.self) }
         for evil in ["Bcc:", "X-Evil", "X-Injected", "X-File", "X-Type"] {
             XCTAssertFalse(lines.contains { $0.hasPrefix(evil) }, evil)
         }
@@ -278,6 +450,20 @@ final class MailCorrectnessReviewTests: XCTestCase {
         let parsed = MIMEParser.parse(data)
         XCTAssertEqual(parsed.to.map(\.address), ["bob@example.com"])
         XCTAssertTrue(parsed.bcc.isEmpty)
+    }
+
+    func testOverlongDisplayNamesStayWithinTheLineLimit() {
+        let longName = String(repeating: "A", count: 1200)
+        let quotedName = "Smith, " + String(repeating: "B", count: 1200)
+        let message = OutgoingMessage(accountID: "a", from: EmailAddress(name: longName, address: "a@example.com"),
+                                      to: [EmailAddress(name: quotedName, address: "b@example.com")], subject: "x", body: "y")
+        let (data, _) = MessageBuilder.build(message)
+        assertWireFormat(data, limit: 998)
+        let parsed = MIMEParser.parse(data)
+        XCTAssertEqual(parsed.from.first?.name, longName)
+        XCTAssertEqual(parsed.from.first?.address, "a@example.com")
+        XCTAssertEqual(parsed.to.first?.name, quotedName)
+        XCTAssertEqual(parsed.to.first?.address, "b@example.com")
     }
 
     func testBuiltMessageRoundTripsNamesSubjectsAndLongLines() {

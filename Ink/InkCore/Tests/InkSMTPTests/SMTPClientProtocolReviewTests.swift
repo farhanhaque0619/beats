@@ -86,6 +86,17 @@ final class SMTPClientProtocolReviewTests: XCTestCase {
         assertLinesWithinLimit(script.transcript)
     }
 
+    /// Envelope address checks work on Unicode scalars: a combining mark after a space or `<`
+    /// makes one Character, which Character-level checks (and Apple's String.contains) miss.
+    func testEnvelopeAddressChecksSeeThroughCombiningMarks() {
+        XCTAssertThrowsError(try SMTPAddress.clean("ada \u{301}lovelace@example.org", allowEmpty: false))
+        XCTAssertThrowsError(try SMTPAddress.clean("ada@exa \u{301}mple.org", allowEmpty: false))
+        XCTAssertThrowsError(try SMTPAddress.clean("a<\u{338}b@example.org", allowEmpty: false))
+        XCTAssertThrowsError(try SMTPAddress.clean("ab>\u{338}@example.org", allowEmpty: false))
+        XCTAssertEqual(try SMTPAddress.clean(" <rene\u{301}@example.org> ", allowEmpty: false), "rene\u{301}@example.org")
+        XCTAssertEqual(try SMTPAddress.clean("\"ada lovelace\"@example.org", allowEmpty: false), "\"ada lovelace\"@example.org")
+    }
+
     /// A server that keeps challenging after the credentials must not be left mid-exchange:
     /// the client cancels with `*` so the next command isn't taken as a SASL response.
     func testUnexpectedSecondChallengeIsCancelled() async throws {

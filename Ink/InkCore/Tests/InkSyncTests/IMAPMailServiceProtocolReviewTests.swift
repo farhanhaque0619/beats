@@ -22,6 +22,22 @@ final class IMAPMailServiceProtocolReviewTests: XCTestCase {
         F.literal("Message-ID: <\(id)>\r\n\r\n")
     }
 
+    final class ChangeCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [MailboxChange] = []
+        private var finished = false
+        func append(_ value: MailboxChange) { lock.withLock { values.append(value) } }
+        func finish() { lock.withLock { finished = true } }
+        var snapshot: [MailboxChange] { lock.withLock { values } }
+        var isFinished: Bool { lock.withLock { finished } }
+    }
+
+    private func waitUntil(timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line, _ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertTrue(condition(), "timed out", file: file, line: line)
+    }
+
     // MARK: Finding messages by Message-ID
 
     /// IMAP `HEADER` search is a substring match: searching for `1@example.com` also finds
@@ -60,6 +76,59 @@ final class IMAPMailServiceProtocolReviewTests: XCTestCase {
         let service = F.service(account, transports: IMAPServiceTransportQueue([script]))
         await assertIMAPServiceThrows(.messageNotFound) { try await service.body(for: stale) }
         XCTAssertFalse(script.transcript.contains("BODY.PEEK[]"), "the wrong message must not be downloaded")
+    }
+
+    // MARK: Sync efficiency
+
+    /// On a server whose partial fetches are unusable, snippets come from whole text parts.
+    /// A 5 MB text part (a log, a pasted dump) must not be downloaded during sync for a
+    /// 200-character preview.
+    func testSnippetsSkipHugeTextPartsWhenPartialFetchIsBroken() async throws {
+        let huge = "(\"text\" \"plain\" (\"charset\" \"utf-8\") NIL NIL \"7bit\" 5000000 90000 NIL NIL NIL NIL)"
+        let script = ScriptedTransport(T.greenMailLogin() + [
+            T.greenMailSelect(exists: 2, uidNext: 3),
+            .expect("* FETCH 1:2 \(T.summaryItemsPrefix)", reply:
+                T.summary(seq: 1, uid: 1, subject: "Small", messageID: "a@example.com")
+                + T.summary(seq: 2, uid: 2, subject: "Huge", messageID: "b@example.com", structure: huge) + T.ok()),
+            .expect("* UID FETCH 1:2 (UID BODY.PEEK[1]<0.2048>)", reply: "* 1 FETCH (UID 1)\r\n* 2 FETCH (UID 2)\r\n" + T.ok()),
+            .expect("* UID FETCH 1 (UID BODY.PEEK[1])", reply: "* 1 FETCH (UID 1 BODY[1] \(F.literal("Alpha text")))\r\n" + T.ok()),
+        ])
+        let service = F.service(F.account(host: "localhost"), transports: IMAPServiceTransportQueue([script]))
+        let result = try await service.sync(mailbox: F.mailbox("INBOX", role: .inbox, accountID: "acct-other"), previous: nil, limit: 10)
+        XCTAssertEqual(result.upserted.map(\.snippet), ["", "Alpha text"])
+        XCTAssertFalse(script.transcript.contains("UID FETCH 1:2 (UID BODY.PEEK[1])\r\n"), "the 5 MB part was requested whole")
+    }
+
+    // MARK: Watching
+
+    /// A server that answers every IDLE with an immediate tagged OK must not have IDLE
+    /// re-issued in a tight loop (a busy connection draining the battery); after a few such
+    /// answers the watch polls with NOOP instead.
+    func testIdleThatEndsAtOnceFallsBackToPolling() async throws {
+        var options = F.fastOptions
+        options.pollInterval = 0.2
+        let script = ScriptedTransport(T.dovecotLogin() + [
+            IMAPMailServiceWatchTests.examine,
+            .expect("* IDLE", reply: "+ idling\r\n{TAG} OK Idle completed.\r\n"),
+            .expect("* IDLE", reply: "+ idling\r\n{TAG} OK Idle completed.\r\n"),
+            .expect("* IDLE", reply: "+ idling\r\n{TAG} OK Idle completed.\r\n"),
+            .expect("* NOOP", reply: "* 5 EXISTS\r\n{TAG} OK NOOP completed.\r\n"),
+            T.logoutStep,
+        ])
+        let queue = IMAPServiceTransportQueue([script])
+        let log = IMAPServiceLog()
+        let service = F.service(account, transports: queue, options: options, log: log)
+        let changes = ChangeCollector()
+        let task = Task {
+            for await change in service.watch(mailbox: inbox) { changes.append(change) }
+            changes.finish()
+        }
+        await waitUntil { changes.snapshot == [.changed] }
+        XCTAssertEqual(queue.openedCount, 1, "the connection is fine; nothing to reconnect")
+        XCTAssertTrue(log.text.contains("ends IDLE"))
+        await service.disconnect()
+        await waitUntil { changes.isFinished }
+        task.cancel()
     }
 
     // MARK: Deletion detection

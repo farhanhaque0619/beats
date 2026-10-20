@@ -125,6 +125,9 @@ struct SearchQuery {
 extension MailStore {
     static let bodyMemoryLimit = 200
     static let serverSearchLimit = 1_000
+    /// Cached body files up to this size are read on the main thread by `cachedBody(for:)`;
+    /// bigger ones (attachments) only off it, by `body(for:)`.
+    static let mainThreadBodyFileLimit = 512 * 1024
 
     // MARK: Bodies
 
@@ -134,7 +137,9 @@ extension MailStore {
             body.messageID = message.id
             return body
         }
-        guard let cache, var body = cache.loadBody(key: key, accountID: message.accountID) else { return nil }
+        guard let cache, var body = cache.loadBody(key: key, accountID: message.accountID, maxFileBytes: Self.mainThreadBodyFileLimit) else {
+            return nil
+        }
         rememberBody(body, key: key, accountID: message.accountID, persist: false)
         body.messageID = message.id
         return body
@@ -143,6 +148,13 @@ extension MailStore {
     func loadBody(for message: MessageSummary) async throws -> MessageBody {
         if let cached = lookupCachedBody(for: message) { return cached }
         let key = message.dedupeKey
+        if let cache, var body = await cache.loadBodyInBackground(key: key, accountID: message.accountID) {
+            if bodyMemory[key] == nil, services[message.accountID] != nil {
+                rememberBody(body, key: key, accountID: message.accountID, persist: false)
+            }
+            body.messageID = message.id
+            return body
+        }
         if let running = bodyTasks[key] {
             var body = try await running.value
             body.messageID = message.id
@@ -258,6 +270,8 @@ extension MailStore {
     private func rememberSearchResults(_ found: [MessageSummary]) {
         guard !found.isEmpty else { return }
         for var message in found where services[message.accountID] != nil {
+            // Moved away by an action the server may not have seen yet (or just did).
+            if protections.contains(where: { $0.hiddenIDs.contains(message.id) }) { continue }
             for protection in protections {
                 if let edit = protection.flagEdits[message.dedupeKey] { message.flags = edit.applied(to: message.flags) }
             }

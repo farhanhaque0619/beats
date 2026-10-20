@@ -206,9 +206,15 @@ extension MailStore {
         let result = try await service.sync(mailbox: mailbox, previous: previous, limit: limit)
         guard services[mailbox.accountID] === service else { return }
         merge(result, into: mailbox, limit: limit, startedAt: sequence)
-        if mailbox.role == .inbox, persisted.highWaterMarks[mailbox.accountID] == nil,
-           let mark = HighWaterMark.covering(messages(accountID: mailbox.accountID, path: mailbox.path)) {
-            persisted.highWaterMarks[mailbox.accountID] = mark
+        // The first inbox sync sets where "new mail" starts. So does the first sync of a new demo
+        // session: its sample mail is dated relative to this launch and isn't news.
+        let previousMark = persisted.highWaterMarks[mailbox.accountID]
+        let newDemoSession = account(id: mailbox.accountID)?.isDemo == true && previousMark.map { $0.uidValidity != result.state.uidValidity } == true
+        if mailbox.role == .inbox, previousMark == nil || newDemoSession {
+            // Everything in the mailbox now is old, even when that's nothing at all: the first
+            // mail to an empty inbox is news.
+            persisted.highWaterMarks[mailbox.accountID] = HighWaterMark.start(
+                state: result.state, covering: messages(accountID: mailbox.accountID, path: mailbox.path), now: environment.now())
             persistState()
         }
     }
@@ -220,7 +226,8 @@ extension MailStore {
         var incoming = result.upserted.filter { $0.accountID == mailbox.accountID }
         for index in incoming.indices where incoming[index].mailboxPath != mailbox.path { incoming[index].mailboxPath = mailbox.path }
 
-        if result.didReset || box.state?.uidValidity != result.state.uidValidity {
+        let didReset = result.didReset || box.state?.uidValidity != result.state.uidValidity
+        if didReset {
             var seen = Set<String>()
             box.messages = incoming.filter { seen.insert($0.id).inserted }
             if result.didReset, incoming.count < limit { exhaustedMailboxes.insert(key) } else { exhaustedMailboxes.remove(key) }
@@ -239,7 +246,15 @@ extension MailStore {
             }
         }
         box.messages.removeAll { $0.uidValidity != result.state.uidValidity }
-        box.state = result.state
+        var state = result.state
+        if !didReset {
+            // Older mail paged in while this sync ran isn't in the window the server worked from:
+            // keep it in the window so the next sync updates its flags and notices deletions.
+            let known = Set(state.knownUIDs)
+            let paged = Set(box.messages.lazy.map(\.uid).filter { !known.contains($0) })
+            if !paged.isEmpty { state.knownUIDs = (state.knownUIDs + paged).sorted() }
+        }
+        box.state = state
         box.savedAt = environment.now()
 
         pruneProtections()
@@ -364,7 +379,10 @@ extension MailStore {
         for account in accounts {
             let inbox = Threader.dedupe(inboxMessages(accountID: account.id))
             guard !inbox.isEmpty else { continue }
-            if let mark = persisted.highWaterMarks[account.id] {
+            if let mark = persisted.highWaterMarks[account.id],
+               // Each launch starts a new sample session (new UIDVALIDITY, dates moved to now):
+               // only what arrives during the session is news.
+               !(account.isDemo && inbox.contains { $0.uidValidity != mark.uidValidity }) {
                 arrived += inbox.filter { mark.isBefore($0) && $0.isUnread && !$0.isBulk && !isFromMe($0) }
                 persisted.highWaterMarks[account.id] = mark.advanced(past: inbox)
             } else {
@@ -408,6 +426,8 @@ extension MailStore {
             do {
                 let older = try await service.fetchOlder(mailbox: mailbox, olderThanUID: oldest, limit: Self.pageSize)
                 guard services[mailbox.accountID] === service, var current = mailboxData[key] else { continue }
+                // A sync that reset the mailbox meanwhile (new UIDVALIDITY) makes this page meaningless.
+                guard validity == nil || current.state?.uidValidity == validity else { continue }
                 let fresh = older.filter { $0.accountID == mailbox.accountID && $0.uid < oldest && (validity == nil || $0.uidValidity == validity) }
                 if fresh.isEmpty {
                     exhaustedMailboxes.insert(key)

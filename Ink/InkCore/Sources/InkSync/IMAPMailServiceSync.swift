@@ -380,11 +380,17 @@ extension IMAPMailService {
         for (uid, target) in targets { groups[target.groupKey, default: []].append(uid) }
         var snippets: [UInt32: String] = [:]
         let batchSize = await batchSize(client)
+        // Whole text parts (when partial fetches don't work) only when they are small: sync
+        // never downloads big bodies just for a preview.
+        func wholePartSet(_ chunk: [UInt32]) -> IMAPSequenceSet {
+            IMAPSequenceSet(chunk.filter { (targets[$0]?.size ?? 0) <= Self.maxWholePartSnippetBytes })
+        }
         for key in groups.keys.sorted() {
             guard let uids = groups[key], let sample = uids.first.flatMap({ targets[$0] }) else { continue }
             for chunk in Self.chunks(uids.sorted(), size: batchSize) {
-                let set = IMAPSequenceSet(chunk)
                 let usePartial = !partialFetchBroken
+                let set = usePartial ? IMAPSequenceSet(chunk) : wholePartSet(chunk)
+                guard !set.isEmpty else { continue }
                 let item = IMAPFetchItem.bodyPeek(section: sample.section, partial: usePartial ? (0, sample.length) : nil)
                 var responses: [IMAPFetchResponse] = []
                 do {
@@ -400,8 +406,10 @@ extension IMAPMailService {
                     log("Partial fetch failed (\(error.localizedDescription)); fetching whole text parts for snippets.")
                     partialFetchBroken = true
                     if await client.state == .disconnected { throw IMAPMailServiceRetry.partialFetchFailed }
+                    let whole = wholePartSet(chunk)
+                    guard !whole.isEmpty else { continue }
                     do {
-                        responses = try await client.fetch(set, byUID: true, items: [.bodyPeek(section: sample.section, partial: nil)])
+                        responses = try await client.fetch(whole, byUID: true, items: [.bodyPeek(section: sample.section, partial: nil)])
                     } catch let retryError as MailError where !Self.isConnectionLoss(retryError) && retryError != .cancelled {
                         log("Couldn't fetch snippets: \(retryError.localizedDescription)")
                         continue
@@ -412,8 +420,10 @@ extension IMAPMailService {
                     // garbled (GreenMail writes `BODY[1]<0>{22}` with no space). Use whole parts.
                     log("The server's partial fetch replies are unusable; fetching whole text parts for snippets.")
                     partialFetchBroken = true
+                    let whole = wholePartSet(chunk)
+                    guard !whole.isEmpty else { continue }
                     do {
-                        responses = try await client.fetch(set, byUID: true, items: [.bodyPeek(section: sample.section, partial: nil)])
+                        responses = try await client.fetch(whole, byUID: true, items: [.bodyPeek(section: sample.section, partial: nil)])
                     } catch let retryError as MailError where !Self.isConnectionLoss(retryError) && retryError != .cancelled {
                         log("Couldn't fetch snippets: \(retryError.localizedDescription)")
                         continue
@@ -429,6 +439,10 @@ extension IMAPMailService {
         }
         return snippets
     }
+
+    /// The largest text part fetched whole for a snippet when the server's partial fetches are
+    /// unusable; bigger parts get no snippet until the message is opened.
+    static let maxWholePartSnippetBytes = 64 * 1024
 
     static func chunks(_ values: [UInt32], size: Int) -> [[UInt32]] {
         let size = max(1, size)
@@ -531,7 +545,8 @@ enum IMAPMailServiceSummaries {
         var result: [EmailAddress] = []
         for item in list where !item.isGroupStart && !item.isGroupEnd {
             guard var mailbox = item.mailbox?.trimmingCharacters(in: .whitespacesAndNewlines), !mailbox.isEmpty else { continue }
-            if mailbox.contains("=?") { mailbox = EncodedWord.decode(mailbox) }
+            // `decode` checks for "=?" on bytes (`String.contains` differs between Apple and Linux).
+            mailbox = EncodedWord.decode(mailbox)
             var address = mailbox
             if let host = item.host?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty,
                !placeholderHosts.contains(host.lowercased()) {
@@ -551,7 +566,7 @@ enum IMAPMailServiceSummaries {
     /// RFC 2047-decoded, single line.
     static func decodeText(_ raw: String?) -> String {
         guard let raw, !raw.isEmpty else { return "" }
-        return collapse(raw.contains("=?") ? EncodedWord.decode(raw) : raw)
+        return collapse(EncodedWord.decode(raw))
     }
 
     static func collapse(_ s: String) -> String {
@@ -609,6 +624,8 @@ enum IMAPMailServiceSummaries {
         var encoding: String
         var contentType: ContentType
         var isHTML: Bool
+        /// The part's encoded size from BODYSTRUCTURE (0 when the server didn't say).
+        var size: Int = 0
 
         /// Messages sharing a section and length are fetched together.
         var groupKey: String { "\(section)|\(length)" }
@@ -619,7 +636,8 @@ enum IMAPMailServiceSummaries {
         let isHTML = part.subtype == "html"
         let length = max(64, isHTML ? options.htmlSnippetBytes : options.snippetBytes)
         let contentType = ContentType(type: part.type, subtype: part.subtype, parameters: part.parameters)
-        return SnippetTarget(section: section, length: length, encoding: part.encoding, contentType: contentType, isHTML: isHTML)
+        return SnippetTarget(section: section, length: length, encoding: part.encoding, contentType: contentType, isHTML: isHTML,
+                             size: max(0, part.size))
     }
 
     /// Decodes a (possibly truncated) part and makes the one-line preview.

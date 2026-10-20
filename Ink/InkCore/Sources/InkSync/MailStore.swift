@@ -424,6 +424,9 @@ public final class MailStore {
     @ObservationIgnored var contactCache: (version: Int, index: ContactIndex)?
     @ObservationIgnored var searchTextCache: (version: Int, text: [String: String])?
 
+    /// Disk space for cached message bodies per account; the least recently fetched beyond it are
+    /// deleted at launch (and downloaded again if opened).
+    @ObservationIgnored var bodyCacheLimit = 256 * 1024 * 1024
     @ObservationIgnored var bodyMemory: [String: MessageBody] = [:]
     @ObservationIgnored var bodyMemoryOrder: [String] = []
     @ObservationIgnored var bodyTasks: [String: Task<MessageBody, Error>] = [:]
@@ -433,6 +436,8 @@ public final class MailStore {
 
     @ObservationIgnored var protections: [Protection] = []
     @ObservationIgnored var pendingAction: PendingAction?
+    /// Mirrors pending-actions.json: triage taken but not yet confirmed by the server.
+    @ObservationIgnored var journal: [JournalEntry] = []
     @ObservationIgnored var undoStack: [UndoEntry] = []
     /// Which undo entry the current toast belongs to.
     @ObservationIgnored var toastEntry: UndoEntry?
@@ -450,6 +455,10 @@ public final class MailStore {
     @ObservationIgnored var inFlight: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored var wakeTimer: Task<Void, Never>?
     @ObservationIgnored var isWaking = false
+    /// Snoozes being woken right now. Gone from `snoozes` (the UI shows them back), but still
+    /// written to snoozes.json until the server has them in the inbox again, so a wake the app
+    /// didn't live to finish runs again at the next launch.
+    @ObservationIgnored var wakingSnoozes: [String: SnoozeRecord] = [:]
     @ObservationIgnored var liveTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored var liveSyncScheduled: Set<String> = []
     @ObservationIgnored var liveUpdatesWanted = false

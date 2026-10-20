@@ -140,28 +140,33 @@ enum SMTPAddress {
 
     /// Strips whitespace and one pair of angle brackets; rejects anything that could smuggle a
     /// second command (CR, LF, NUL, other controls) or isn't a single mailbox.
+    ///
+    /// Every check looks at Unicode scalars, not Characters: a combining mark after `<` or a
+    /// space forms one Character that Character comparisons (and `String.contains` on Apple
+    /// platforms) don't see, while the bytes still go on the wire.
     static func clean(_ raw: String, allowEmpty: Bool) throws -> String {
-        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("<") && value.hasSuffix(">") && value.count >= 2 {
-            value = String(value.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        var scalars = Array(raw.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars)
+        if scalars.count >= 2, scalars.first == "<", scalars.last == ">" {
+            scalars = Array(scalars.dropFirst().dropLast())
+            while let first = scalars.first, first == " " || first == "\t" { scalars.removeFirst() }
+            while let last = scalars.last, last == " " || last == "\t" { scalars.removeLast() }
         }
-        if value.isEmpty {
+        if scalars.isEmpty {
             if allowEmpty { return "" }
             throw Problem.empty
         }
-        for scalar in value.unicodeScalars where scalar.value < 0x20 || scalar.value == 0x7F {
-            throw Problem.invalid(printable(raw))
-        }
-        if value.contains("<") || value.contains(">") { throw Problem.invalid(printable(raw)) }
-        guard let at = value.lastIndex(of: "@"), at != value.startIndex, value.index(after: at) != value.endIndex else {
-            throw Problem.invalid(printable(raw))
-        }
-        let local = value[..<at]
-        let domain = value[value.index(after: at)...]
-        let quotedLocal = local.hasPrefix("\"") && local.hasSuffix("\"") && local.count >= 2
-        if !quotedLocal, local.contains(where: { $0 == " " || $0 == "\t" || $0 == "@" }) { throw Problem.invalid(printable(raw)) }
-        if domain.contains(where: { $0 == " " || $0 == "\t" || $0 == "@" }) { throw Problem.invalid(printable(raw)) }
-        return value
+        let invalid = Problem.invalid(printable(raw))
+        if scalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F || $0 == "<" || $0 == ">" }) { throw invalid }
+        guard let at = scalars.lastIndex(of: "@"), at > 0, at < scalars.count - 1 else { throw invalid }
+        let local = scalars[..<at]
+        let domain = scalars[(at + 1)...]
+        func isSeparator(_ scalar: Unicode.Scalar) -> Bool { scalar == " " || scalar == "\t" || scalar == "@" }
+        let quotedLocal = local.count >= 2 && local.first == "\"" && local.last == "\""
+        if !quotedLocal, local.contains(where: isSeparator) { throw invalid }
+        if domain.contains(where: isSeparator) { throw invalid }
+        var value = String.UnicodeScalarView()
+        value.append(contentsOf: scalars)
+        return String(value)
     }
 
     static func isASCII(_ value: String) -> Bool { value.utf8.allSatisfy { $0 < 0x80 } }

@@ -79,6 +79,9 @@ public enum Snippet {
         "view it in your browser", "having trouble viewing this email", "can't see this email", "trouble viewing",
         "click here to view", "web version", "open in browser", "if you are having trouble viewing", "view as a web page",
         "e-mail im browser ansehen", "im browser anzeigen", "afficher dans le navigateur", "ver en el navegador",
+        // Text alternatives that only say to use an HTML client.
+        "html-capable", "html capable", "html-compatible", "html compatible", "does not support html", "doesn't support html",
+        "cannot display html", "can't display html", "unable to display html", "plain text version of", "plain-text version of",
     ]
 
     static let mobileFooters = [
@@ -95,7 +98,7 @@ public enum Snippet {
             return true
         }
         if (lower.hasPrefix("[image:") || lower.hasPrefix("[cid:") || lower.hasPrefix("[http")) && lower.hasSuffix("]") { return true }
-        if line.allSatisfy({ "-_=*~#.•·|".contains($0) || $0.isWhitespace }) { return true }
+        if line.allSatisfy({ "-_=*~#.•·|—–―─━═".contains($0) || $0.isWhitespace }) { return true }
         if line.count <= 90 {
             if boilerplate.contains(where: { lower.contains($0) }) { return true }
             if mobileFooters.contains(where: { lower.hasPrefix($0) }) { return true }

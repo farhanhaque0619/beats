@@ -14,7 +14,7 @@ public enum AddressParser {
         let trimmed = s.trimmedWhitespace
         guard !trimmed.isEmpty else { return [] }
         var result = parse(tokens: tokenize(Array(trimmed.utf8)))
-        if result.isEmpty, trimmed.contains("=?") {
+        if result.isEmpty, trimmed.containsASCII("=?") {
             let decoded = EncodedWord.decode(trimmed)
             if decoded != trimmed { result = parse(tokens: tokenize(Array(decoded.utf8))) }
         }
@@ -292,7 +292,7 @@ public enum AddressParser {
     static func displayName(_ words: [String]) -> String? {
         guard !words.isEmpty else { return nil }
         var name = words.joined(separator: " ")
-        if name.contains("=?") { name = EncodedWord.decode(name) }
+        if name.containsASCII("=?") { name = EncodedWord.decode(name) }
         name = name.collapsingWhitespace
         while name.count >= 2, let first = name.first, let last = name.last,
               (first == "'" && last == "'") || (first == "\"" && last == "\"") {

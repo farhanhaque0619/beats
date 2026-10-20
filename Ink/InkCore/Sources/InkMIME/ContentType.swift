@@ -242,7 +242,7 @@ enum HeaderParameters {
         }
         var result: [String: String] = [:]
         for (name, value) in plain {
-            result[name] = value.contains("=?") ? EncodedWord.decode(value) : value
+            result[name] = value.containsASCII("=?") ? EncodedWord.decode(value) : value
         }
         for (name, segs) in segments {
             // A lone "name*" is the extended form of the whole value; otherwise sort the pieces.
@@ -272,7 +272,7 @@ enum HeaderParameters {
                 }
             }
             var value = Charset.decode(Data(bytes), charset: charset)
-            if value.contains("=?") { value = EncodedWord.decode(value) }
+            if value.containsASCII("=?") { value = EncodedWord.decode(value) }
             result[name] = value
         }
         return result

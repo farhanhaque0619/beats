@@ -20,17 +20,27 @@ extension MailStore {
             guard account(id: accountID) != nil else { continue }
 
             if let record = snoozes[conversation.id] {
-                // Snoozed mail is already archived on the server: cancel the snooze, and act on the
-                // archived copies we know about.
+                // Snoozed mail is already archived on the server: cancel the snooze, and act on
+                // where its messages are now, plus anything that arrived in the thread since.
                 snoozes[conversation.id] = nil
                 change.snoozesRemoved.append((conversation.id, record))
                 count += 1
-                if action != .archive {
-                    let keys = Set(record.messages.map(\.dedupeKey))
-                    let copies = cachedCopies(accountID: accountID, keys: keys, excludingRoles: [.inbox, .sent, .drafts, .trash, .junk])
-                    if !copies.isEmpty {
-                        removeLocally(copies, change: &change, protection: &protection)
-                        operations.append(ServerOperation(accountID: accountID, action: action, messages: copies))
+                let live = liveCopies(of: record, in: conversation, for: action, destination: destination)
+                var archived: [MessageSummary] = []
+                var unlocated: [MessageSummary] = []
+                if !Self.leavesArchivedMailInPlace(action, archivePaths: archivePaths(accountID: accountID)) {
+                    let keys = Set(record.messages.map(\.dedupeKey)).subtracting(live.map(\.dedupeKey))
+                    archived = archivedCopies(accountID: accountID, keys: keys).filter { isEligible($0, for: action, accountID: accountID) }
+                    let found = Set(archived.map(\.dedupeKey))
+                    unlocated = wakeTargets(record).filter { keys.contains($0.dedupeKey) && !found.contains($0.dedupeKey) }
+                }
+                let targets = live + archived
+                removeLocally(targets, change: &change, protection: &protection)
+                let operation = ServerOperation(accountID: accountID, action: action, messages: targets, unlocated: unlocated)
+                if !operation.isEmpty {
+                    operations.append(operation)
+                    if let path = destinationPath(for: action, accountID: accountID, explicit: destination) {
+                        followUps.append(.markStale(accountID: accountID, path: path))
                     }
                 }
                 continue
@@ -73,34 +83,93 @@ extension MailStore {
                       toast: text, systemImage: image)
     }
 
+    /// Whether `action` makes sense for this copy where it is.
+    private func isEligible(_ message: MessageSummary, for action: MailAction, accountID: String) -> Bool {
+        let role = self.role(ofPath: message.mailboxPath, accountID: accountID)
+        switch action {
+        case .archive: return ![.archive, .all, .sent, .drafts].contains(role)
+        case .trash: return role != .trash
+        case .markSpam: return ![.junk, .sent, .drafts].contains(role)
+        case .move(let path): return message.mailboxPath != path && role != .drafts
+        case .moveToInbox: return ![.inbox, .sent, .drafts].contains(role)
+        default: return true
+        }
+    }
+
     /// The copies a move acts on: what the current list shows of the conversation, else every copy
     /// the action makes sense for.
     private func moveTargets(for action: MailAction, in conversation: Conversation, destination: MailboxInfo?) -> [MessageSummary] {
         let accountID = conversation.accountID
-        func eligible(_ message: MessageSummary) -> Bool {
-            let role = self.role(ofPath: message.mailboxPath, accountID: accountID)
-            switch action {
-            case .archive: return ![.archive, .all, .sent, .drafts].contains(role)
-            case .trash: return role != .trash
-            case .markSpam: return ![.junk, .sent, .drafts].contains(role)
-            case .move(let path): return message.mailboxPath != path && role != .drafts
-            case .moveToInbox: return ![.inbox, .sent, .drafts].contains(role)
-            default: return true
-            }
-        }
         let plan = plan(for: scope, accountID: accountID)
         let primary = plan?.primaryPaths ?? []
         // Your own sent copies only move when you're looking at Sent.
         let keepSent = plan?.role != .sent
         let shown = conversation.messages.filter { message in
-            guard primary.contains(message.mailboxPath), eligible(message) else { return false }
+            guard primary.contains(message.mailboxPath), isEligible(message, for: action, accountID: accountID) else { return false }
             return !(keepSent && self.role(ofPath: message.mailboxPath, accountID: accountID) == .sent)
         }
         if !shown.isEmpty { return shown }
         return conversation.messages.filter { message in
             let role = self.role(ofPath: message.mailboxPath, accountID: accountID)
-            return eligible(message) && role != .sent && role != .drafts
+            return isEligible(message, for: action, accountID: accountID) && role != .sent && role != .drafts
         }
+    }
+
+    /// Copies of a snoozed conversation that are really in a cached folder: mail that arrived in
+    /// the thread after it was snoozed, and snoozed messages back in the inbox anyway (the archive
+    /// never reached the server). The snoozed messages themselves are stale inbox copies.
+    private func liveCopies(of record: SnoozeRecord, in conversation: Conversation, for action: MailAction,
+                            destination: MailboxInfo?) -> [MessageSummary] {
+        let accountID = record.accountID
+        var result = moveTargets(for: action, in: conversation, destination: destination).filter(isCached)
+        var known = Set(result.map(\.id))
+        for message in inboxCopies(ofSnoozed: conversation.id, record: record) where known.insert(message.id).inserted {
+            if isEligible(message, for: action, accountID: accountID) { result.append(message) }
+        }
+        return result
+    }
+
+    /// The cached inbox copies that belong to a snoozed thread: replies that arrived after it was
+    /// snoozed (the inbox shows them under the same conversation ID) and snoozed messages back in
+    /// the inbox anyway.
+    func inboxCopies(ofSnoozed id: String, record: SnoozeRecord) -> [MessageSummary] {
+        let accountID = record.accountID
+        let inbox = inboxMessages(accountID: accountID)
+        guard !inbox.isEmpty else { return [] }
+        let keys = Set(record.messages.map(\.dedupeKey))
+        let inboxPath = mailbox(accountID: accountID, role: .inbox)?.path ?? "INBOX"
+        var ids = Set(inbox.filter { keys.contains($0.dedupeKey) }.map(\.id))
+        if let thread = allConversations(for: .account(accountID: accountID, role: .inbox)).first(where: { $0.id == id }) {
+            ids.formUnion(thread.messages.filter { $0.mailboxPath == inboxPath }.map(\.id))
+        }
+        return inbox.filter { ids.contains($0.id) }
+    }
+
+    /// True when this exact copy is in the cache (not a stale summary of where it used to be).
+    func isCached(_ message: MessageSummary) -> Bool {
+        mailboxData[boxKey(message.accountID, message.mailboxPath)]?.messages.contains { $0.id == message.id } ?? false
+    }
+
+    /// Archive, or All Mail where that's how the account archives.
+    func archivePaths(accountID: String) -> Set<String> {
+        Set([mailbox(accountID: accountID, role: .archive)?.path, mailbox(accountID: accountID, role: .all)?.path].compactMap { $0 })
+    }
+
+    /// Snoozed mail sits in the archive; archiving it again, or moving it to the archive folder,
+    /// leaves it where it is.
+    static func leavesArchivedMailInPlace(_ action: MailAction, archivePaths: Set<String>) -> Bool {
+        switch action {
+        case .archive: return true
+        case .move(let path): return archivePaths.contains(path)
+        default: return false
+        }
+    }
+
+    /// Cached copies (by dedupe key) in the account's Archive / All Mail.
+    func archivedCopies(accountID: String, keys: Set<String>) -> [MessageSummary] {
+        let paths = archivePaths(accountID: accountID)
+        guard !keys.isEmpty, !paths.isEmpty else { return [] }
+        return paths.sorted().flatMap { messages(accountID: accountID, path: $0).filter { keys.contains($0.dedupeKey) } }
     }
 
     private func destinationPath(for action: MailAction, accountID: String, explicit: MailboxInfo?) -> String? {
@@ -171,15 +240,29 @@ extension MailStore {
             let accountID = conversation.accountID
             guard account(id: accountID) != nil, !conversation.messages.isEmpty else { continue }
             count += 1
+            let inboxCopies = conversation.messages.filter { role(ofPath: $0.mailboxPath, accountID: accountID) == .inbox }
             if var record = snoozes[conversation.id] {
-                // Already snoozed: just a new time.
+                // Already snoozed: a new time. Mail that arrived in the thread since (or snoozed
+                // copies back in the inbox anyway) is archived and snoozed along with the rest.
                 change.snoozesRemoved.append((conversation.id, record))
                 change.snoozesAdded.append(conversation.id)
                 record.until = date
+                let keys = Set(record.messages.map(\.dedupeKey))
+                var fresh = inboxCopies.filter(isCached)
+                var known = Set(fresh.map(\.id))
+                for message in self.inboxCopies(ofSnoozed: conversation.id, record: record) where known.insert(message.id).inserted {
+                    fresh.append(message)
+                }
+                if !fresh.isEmpty {
+                    var recorded = keys
+                    record.messages += fresh.filter { recorded.insert($0.dedupeKey).inserted }
+                    record.messages.sort { ($0.date, $0.uid) < ($1.date, $1.uid) }
+                    removeLocally(fresh, change: &change, protection: &protection)
+                    operations.append(ServerOperation(accountID: accountID, action: .archive, messages: fresh))
+                }
                 snoozes[conversation.id] = record
                 continue
             }
-            let inboxCopies = conversation.messages.filter { role(ofPath: $0.mailboxPath, accountID: accountID) == .inbox }
             snoozes[conversation.id] = SnoozeRecord(until: date, messages: conversation.messages, snoozedAt: now)
             change.snoozesAdded.append(conversation.id)
             removeLocally(inboxCopies, change: &change, protection: &protection)
@@ -226,6 +309,7 @@ extension MailStore {
         if let pending = pendingAction, pending.change.snoozesAdded.contains(where: { due[$0] != nil }) { commit(pending) }
         for (id, record) in due {
             snoozes[id] = nil
+            wakingSnoozes[id] = record
             for message in record.messages { persisted.resurfaced[message.dedupeKey] = now }
         }
         let monthAgo = now.addingTimeInterval(-30 * 86_400)
@@ -246,6 +330,11 @@ extension MailStore {
 
     /// Moves woken mail back to the inbox, syncs it, and marks the returned copies unread.
     private func wake(_ records: [(String, SnoozeRecord)], accountID: String) async {
+        defer {
+            // Done (or snoozed again after a failure): snoozes.json can let go of them.
+            for (id, _) in records { wakingSnoozes[id] = nil }
+            persistSnoozes()
+        }
         guard let service = services[accountID] else { return }
         let targets = records.flatMap { wakeTargets($0.1) }
         do {
@@ -295,7 +384,7 @@ extension MailStore {
         var change = LocalChange()
         var protection = Protection()
         applyFlagEdit(read ? FlagEdit(insert: .seen) : FlagEdit(remove: .seen), to: targets, change: &change, protection: &protection)
-        let operations = Self.group(targets, action: read ? .markRead : .markUnread)
+        let operations = flagOperations(targets, action: read ? .markRead : .markUnread)
         let what = read ? "Read" : "Unread"
         beginUndoable(operations: operations, change: change, protection: protection, verb: read ? "mark as read" : "mark as unread",
                       followUps: [], toast: count == 1 ? "Marked as \(what)" : "Marked \(count) conversations as \(what)",
@@ -321,7 +410,7 @@ extension MailStore {
         var change = LocalChange()
         var protection = Protection()
         applyFlagEdit(flagged ? FlagEdit(insert: .flagged) : FlagEdit(remove: .flagged), to: targets, change: &change, protection: &protection)
-        let operations = Self.group(targets, action: flagged ? .flag : .unflag)
+        let operations = flagOperations(targets, action: flagged ? .flag : .unflag)
         let text = flagged ? (count == 1 ? "Starred" : "Starred \(count) conversations") : (count == 1 ? "Unstarred" : "Unstarred \(count) conversations")
         beginUndoable(operations: operations, change: change, protection: protection, verb: flagged ? "star" : "unstar",
                       followUps: [], toast: text, systemImage: flagged ? "star.fill" : "star.slash")
@@ -335,8 +424,10 @@ extension MailStore {
         applyFlagEdit(FlagEdit(insert: .seen), to: unread, change: &change, protection: &protection)
         protections.append(protection)
         markChanged()
-        let operations = Self.group(unread, action: .markRead)
+        let operations = flagOperations(unread, action: .markRead)
         let protectionID = protection.id
+        let journalID = UUID()
+        addToJournal(journalID, operations, verb: "mark as read")
         enqueueCommit {
             if await self.run(operations) == nil {
                 self.finishProtection(protectionID)
@@ -344,7 +435,34 @@ extension MailStore {
                 // Stay read on screen; the next sync shows what the server kept.
                 self.protections.removeAll { $0.id == protectionID }
             }
+            self.forgetJournal(journalID)
         }
+    }
+
+    /// Flag changes for `messages`, grouped per account. A snoozed conversation's summaries describe
+    /// inbox copies that were archived: those point at the archived copy, found now or at commit time.
+    func flagOperations(_ messages: [MessageSummary], action: MailAction) -> [ServerOperation] {
+        var direct: [MessageSummary] = []
+        var unlocated: [MessageSummary] = []
+        for message in messages {
+            guard isStaleSnoozedCopy(message) else {
+                direct.append(message)
+                continue
+            }
+            let archived = archivedCopies(accountID: message.accountID, keys: [message.dedupeKey])
+            if archived.isEmpty { unlocated.append(message) } else { direct += archived }
+        }
+        var operations = Self.group(direct, action: action)
+        for operation in Self.group(unlocated, action: action) {
+            operations.append(ServerOperation(accountID: operation.accountID, action: action, messages: [], unlocated: operation.messages))
+        }
+        return operations.coalesced()
+    }
+
+    /// A snoozed message's summary from before it was archived (no longer where it says).
+    func isStaleSnoozedCopy(_ message: MessageSummary) -> Bool {
+        guard !isCached(message), serverSearchResults[message.id] == nil else { return false }
+        return snoozes.values.contains { record in record.messages.contains { $0.id == message.id } }
     }
 
     /// The newest message someone else sent, else the newest message.
@@ -355,11 +473,17 @@ extension MailStore {
 
     // MARK: Local changes
 
-    /// Removes copies from their cached folders and keeps them from coming back until the server agrees.
+    /// Removes copies from their cached folders (and from server search results) and keeps them
+    /// from coming back until the server agrees.
     func removeLocally(_ messages: [MessageSummary], change: inout LocalChange, protection: inout Protection) {
         var touched = Set<String>()
+        var searchRemoved = Set<String>()
         for message in messages {
             protection.hiddenIDs.insert(message.id)
+            if let result = serverSearchResults.removeValue(forKey: message.id) {
+                change.removedSearchResults.append(result)
+                searchRemoved.insert(message.id)
+            }
             let key = boxKey(message.accountID, message.mailboxPath)
             guard var box = mailboxData[key], let index = box.messages.firstIndex(where: { $0.id == message.id }) else { continue }
             change.removed.append((key, box.messages[index]))
@@ -367,6 +491,7 @@ extension MailStore {
             mailboxData[key] = box
             touched.insert(key)
         }
+        if !searchRemoved.isEmpty { serverSearchOrder.removeAll { searchRemoved.contains($0) } }
         for key in touched { persistMailbox(key: key) }
     }
 
@@ -449,11 +574,15 @@ extension MailStore {
                 serverSearchResults[flagChange.id]?.flags = flagChange.old
             }
         }
+        for result in change.removedSearchResults where serverSearchResults[result.id] == nil && services[result.accountID] != nil {
+            serverSearchResults[result.id] = result
+            serverSearchOrder.append(result.id)
+        }
         for id in change.snoozesAdded {
             snoozes[id] = nil
             snoozesTouched = true
         }
-        for item in change.snoozesRemoved {
+        for item in change.snoozesRemoved where account(id: item.record.accountID) != nil {
             snoozes[item.id] = item.record
             snoozesTouched = true
         }
@@ -478,6 +607,7 @@ extension MailStore {
             self.commit(pending)
         }
         pendingAction = action
+        addToJournal(id, action.operations, verb: verb)
         undoStack.append(.action(id))
         present(text, systemImage: systemImage, entry: .action(id))
         markChanged()
@@ -505,7 +635,9 @@ extension MailStore {
     }
 
     private func runCommit(_ action: PendingAction) async {
-        if let failure = await run(action.operations) {
+        let failure = await run(action.operations)
+        forgetJournal(action.id)
+        if let failure {
             revert(action.change)
             protections.removeAll { $0.id == action.protectionID }
             markChanged()
@@ -540,15 +672,66 @@ extension MailStore {
 
     /// Runs the operations in order; returns the first error.
     func run(_ operations: [ServerOperation]) async -> Error? {
-        for operation in operations where !operation.messages.isEmpty {
+        for operation in operations where !operation.isEmpty {
             guard let service = services[operation.accountID] else { continue }
             do {
-                try await service.perform(operation.action, on: operation.messages)
+                var messages = operation.messages
+                var located: [MessageSummary] = []
+                let moves = operation.action.movesMessages
+                if !operation.unlocated.isEmpty {
+                    let known = Set(messages.map(\.dedupeKey))
+                    located = try await locateSnoozed(operation.unlocated.filter { !known.contains($0.dedupeKey) },
+                                                      accountID: operation.accountID, service: service, bringBack: moves)
+                    guard services[operation.accountID] === service else { continue }
+                    messages += located.filter { isEligible($0, for: operation.action, accountID: operation.accountID) }
+                }
+                guard !messages.isEmpty else { continue }
+                try await service.perform(operation.action, on: messages)
+                if moves, !located.isEmpty { forgetMovedCopies(located) }
             } catch {
                 return error
             }
         }
         return nil
+    }
+
+    /// Where snoozed messages are now. They were archived when snoozed, but the archive folder
+    /// may not be cached, or they may have been archived long enough ago to be outside its synced
+    /// window: sync it and look again. For a move (`bringBack`), the last resort is to have the
+    /// server bring them back to the inbox (it finds them by Message-ID wherever they are) and act
+    /// on them there; otherwise what wasn't found is returned as it was (the snooze's archive may
+    /// not have reached the server yet).
+    func locateSnoozed(_ messages: [MessageSummary], accountID: String, service: MailService,
+                       bringBack: Bool) async throws -> [MessageSummary] {
+        let keys = Set(messages.map(\.dedupeKey))
+        guard !keys.isEmpty else { return [] }
+        var found = archivedCopies(accountID: accountID, keys: keys)
+        if Set(found.map(\.dedupeKey)) != keys,
+           let archive = mailbox(accountID: accountID, role: .archive) ?? mailbox(accountID: accountID, role: .all), archive.isSelectable {
+            try await syncMailbox(archive, fresh: true)
+            found = archivedCopies(accountID: accountID, keys: keys)
+        }
+        let foundKeys = Set(found.map(\.dedupeKey))
+        let missing = messages.filter { !foundKeys.contains($0.dedupeKey) }
+        guard bringBack else { return found + missing }
+        if !missing.isEmpty, let inbox = mailbox(accountID: accountID, role: .inbox) {
+            try await service.perform(.moveToInbox, on: missing)
+            try await syncMailbox(inbox, fresh: true)
+            let missingKeys = Set(missing.map(\.dedupeKey))
+            found += inboxMessages(accountID: accountID).filter { missingKeys.contains($0.dedupeKey) }
+        }
+        return found
+    }
+
+    /// Drops cached copies an action just moved away on the server, and keeps syncs that started
+    /// before it from bringing them back.
+    private func forgetMovedCopies(_ messages: [MessageSummary]) {
+        var protection = Protection()
+        var change = LocalChange()
+        removeLocally(messages, change: &change, protection: &protection)
+        protections.append(protection)
+        finishProtection(protection.id)
+        markChanged()
     }
 
     func finishProtection(_ id: UUID) {
@@ -564,6 +747,7 @@ extension MailStore {
                 guard let action = pendingAction, action.id == id else { continue }
                 action.timer?.cancel()
                 pendingAction = nil
+                forgetJournal(action.id)
                 revert(action.change)
                 protections.removeAll { $0.id == action.protectionID }
                 toast = nil
@@ -608,6 +792,7 @@ extension MailStore {
     }
 
     static func group(_ messages: [MessageSummary], action: MailAction) -> [ServerOperation] {
+        guard !messages.isEmpty else { return [] }
         var order: [String] = []
         var byAccount: [String: [MessageSummary]] = [:]
         for message in messages {
@@ -615,5 +800,15 @@ extension MailStore {
             byAccount[message.accountID, default: []].append(message)
         }
         return order.map { ServerOperation(accountID: $0, action: action, messages: byAccount[$0] ?? []) }.coalesced()
+    }
+}
+
+extension MailAction {
+    /// True for actions that take messages out of the folder they're in.
+    var movesMessages: Bool {
+        switch self {
+        case .archive, .trash, .markSpam, .moveToInbox, .move, .deletePermanently: return true
+        case .markRead, .markUnread, .flag, .unflag: return false
+        }
     }
 }

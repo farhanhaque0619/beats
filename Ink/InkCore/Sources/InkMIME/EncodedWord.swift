@@ -11,7 +11,7 @@ public enum EncodedWord {
     /// - Malformed words (unknown encoding, bad base64, no closing `?=`) are left untouched.
     /// - The RFC 2231 language suffix (`=?utf-8*en?Q?...?=`) is ignored.
     public static func decode(_ s: String) -> String {
-        guard s.contains("=?") else { return s }
+        guard s.containsASCII("=?") else { return s }
         let b = Array(s.utf8)
         let n = b.count
         var out = ""
@@ -175,7 +175,7 @@ public enum EncodedWord {
     }
 
     static func needsEncoding(_ s: String) -> Bool {
-        if s.contains("=?") { return true }
+        if s.containsASCII("=?") { return true }
         for b in s.utf8 where b < 0x20 || b > 0x7E { return true }
         return false
     }

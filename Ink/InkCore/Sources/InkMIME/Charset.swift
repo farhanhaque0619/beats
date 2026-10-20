@@ -47,8 +47,10 @@ public enum Charset {
         case .asciiOrUnknown:
             return decodeFallback(bytes)
         case .windows1252:
+            if isMislabelledUTF8(bytes) { return decodeUTF8(bytes) }
             return decodeSingleByte(bytes, table: SingleByteTables.windows1252High)
         case .latin9:
+            if isMislabelledUTF8(bytes) { return decodeUTF8(bytes) }
             return decodeSingleByte(bytes, table: SingleByteTables.latin9High)
         case .macRoman:
             return decodeSingleByte(bytes, table: SingleByteTables.macRomanHigh)
@@ -292,6 +294,14 @@ public enum Charset {
             return decodeSingleByte(Array(body), table: SingleByteTables.windows1252High)
         }
         return String(decoding: body, as: UTF8.self)
+    }
+
+    /// Web forms and scripts often label UTF-8 text "ISO-8859-1": when Latin-labelled bytes are
+    /// entirely well-formed UTF-8 with multi-byte sequences in them ("CafÃ©" otherwise), they are
+    /// UTF-8. Real Latin-1 text almost never forms valid UTF-8 sequences.
+    static func isMislabelledUTF8(_ bytes: [UInt8]) -> Bool {
+        let check = utf8Validation(stripUTF8BOM(bytes))
+        return check.hasMultibyte && (check.isValid || check.onlyTruncatedTail)
     }
 
     /// True when the bytes contain at least one well-formed UTF-8 multi-byte sequence anywhere.

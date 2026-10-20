@@ -11,8 +11,15 @@ public enum QuoteSplitter {
     /// `-- ` signature separator, or a run of `>` lines that ends the message. Nothing is split when
     /// the sender's part would be empty (bottom-posted replies) or when there is no marker.
     public static func split(_ text: String) -> (body: String, quoted: String?) {
+        split(text, keepingInlineReplies: false)
+    }
+
+    /// `split(_:)`; with `keepingInlineReplies`, nothing is split when the sender answered inline
+    /// (their text sits between quoted lines), so the reader doesn't fold the answers away.
+    static func split(_ text: String, keepingInlineReplies: Bool) -> (body: String, quoted: String?) {
         let lines = text.normalizedNewlines.components(separatedBy: "\n")
         guard let start = quoteStart(lines) else { return (text, nil) }
+        if keepingInlineReplies && hasInlineReplies(lines[start...]) { return (text, nil) }
         let body = trimTrailing(lines[..<start].joined(separator: "\n"))
         guard !body.trimmedWhitespace.isEmpty else { return (text, nil) }
         let quoted = lines[start...].joined(separator: "\n").trimmingCharacters(in: .newlines)
@@ -72,6 +79,23 @@ public enum QuoteSplitter {
             return min(marker ?? start, start)
         }
         return marker
+    }
+
+    /// True when unquoted text sits between two quoted lines: answers written inline.
+    static func hasInlineReplies(_ lines: ArraySlice<String>) -> Bool {
+        var sawQuote = false
+        var textAfterQuote = false
+        for line in lines {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.isEmpty { continue }
+            if t.hasPrefix(">") {
+                if textAfterQuote { return true }
+                sawQuote = true
+            } else if sawQuote {
+                textAfterQuote = true
+            }
+        }
+        return false
     }
 
     /// Index of the first line of a run of `>` lines (blank lines allowed inside) that ends the text.
@@ -211,8 +235,11 @@ enum HTMLQuoteFinder {
         case toParentEnd(parentIndex: Int)
     }
 
-    static func quoteRange(_ b: [UInt8]) -> Range<Int>? {
-        let candidates = findCandidates(b)
+    /// The trailing quote. With `keepingInlineReplies`, a quote container (Gmail's
+    /// `div.gmail_quote`, Yahoo's, Proton's) that holds the sender's own answers between its
+    /// blockquotes is not a quote: folding it away would hide the answers.
+    static func quoteRange(_ b: [UInt8], keepingInlineReplies: Bool = false) -> Range<Int>? {
+        let candidates = findCandidates(b, keepingInlineReplies: keepingInlineReplies)
         guard let last = candidates.last else { return nil }
         // Walk back from the end: the quote starts at the earliest candidate after which only
         // other candidates and invisible markup follow. Each gap is scanned once.
@@ -230,7 +257,7 @@ enum HTMLQuoteFinder {
     }
 
     /// Outermost quote elements in document order.
-    static func findCandidates(_ b: [UInt8]) -> [Range<Int>] {
+    static func findCandidates(_ b: [UInt8], keepingInlineReplies: Bool = false) -> [Range<Int>] {
         var scanner = HTMLScanner(b)
         var stack: [Open] = []
         var result: [Range<Int>] = []
@@ -260,7 +287,11 @@ enum HTMLQuoteFinder {
                         switch p.kind {
                         case .element(let stackIndex) where stackIndex >= index:
                             // Its own end tag is part of it; an ancestor's end tag closing it implicitly isn't.
-                            result.append(p.start..<(stackIndex == index ? tag.range.upperBound : tag.range.lowerBound))
+                            let range = p.start..<(stackIndex == index ? tag.range.upperBound : tag.range.lowerBound)
+                            let container = stack[stackIndex].name != "blockquote"
+                            if !(keepingInlineReplies && container && hasInlineReplies(b, range)) {
+                                result.append(range)
+                            }
                             pending = nil
                         case .toParentEnd(let parentIndex) where parentIndex >= index:
                             result.append(p.start..<tag.range.lowerBound)
@@ -346,8 +377,8 @@ enum HTMLQuoteFinder {
             }
         }
         if id.hasSuffix("divrplyfwdmsg") || id.hasSuffix("appendonsend") { return .toParentEnd }
-        if tag.name == "div", style.contains("border-top:solid"),
-           style.contains("padding:3.0pt0in0in0in") || style.contains("padding:3.0pt0cm0cm0cm") || style.contains("padding:3pt0in0in0in") || style.contains("padding:3pt0cm0cm0cm") {
+        if tag.name == "div", style.containsASCII("border-top:solid"),
+           ["padding:3.0pt0in0in0in", "padding:3.0pt0cm0cm0cm", "padding:3pt0in0in0in", "padding:3pt0cm0cm0cm"].contains(where: style.containsASCII) {
             return .toParentEnd
         }
         if tag.name == "blockquote" && type == "cite" { return .element }
@@ -359,6 +390,31 @@ enum HTMLQuoteFinder {
         }
         if id.hasPrefix("yahoo_quoted") || id == "mail-editor-reference-message-container" { return .element }
         return nil
+    }
+
+    /// True when visible text sits between two blockquotes inside `range` (answers written inline).
+    static func hasInlineReplies(_ b: [UInt8], _ range: Range<Int>) -> Bool {
+        var scanner = HTMLScanner(Array(b[range]))
+        var depth = 0
+        var sawQuote = false
+        var textAfterQuote = false
+        while let token = scanner.next() {
+            switch token {
+            case .text(let r):
+                if depth == 0, sawQuote, containsVisibleText(scanner.b, r) { textAfterQuote = true }
+            case .tag(let tag) where tag.name == "blockquote":
+                if tag.isEnd {
+                    depth = max(0, depth - 1)
+                    if depth == 0 { sawQuote = true }
+                } else if !tag.selfClosing {
+                    if depth == 0 && textAfterQuote { return true }
+                    depth += 1
+                }
+            default:
+                continue
+            }
+        }
+        return false
     }
 
     private static func hrEnd(_ b: [UInt8], _ start: Int) -> Int {

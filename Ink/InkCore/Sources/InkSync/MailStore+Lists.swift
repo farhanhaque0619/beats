@@ -232,10 +232,12 @@ extension MailStore {
     /// Every cached message (all folders, plus server search results), threaded per account.
     func everything() -> (conversations: [Conversation], byID: [String: Int]) {
         if let cached = everythingCache, cached.version == dataVersion { return (cached.conversations, cached.byID) }
+        // Fixed order (dictionaries iterate in a random one), so the copy de-duplication keeps
+        // is the same every time.
         var messages: [MessageSummary] = []
-        for box in mailboxData.values { messages += box.messages }
+        for key in mailboxData.keys.sorted() { messages += mailboxData[key]?.messages ?? [] }
         messages += serverSearchOrder.compactMap { serverSearchResults[$0] }
-        for record in snoozes.values { messages += record.messages }
+        for key in snoozes.keys.sorted() { messages += snoozes[key]?.messages ?? [] }
         let roles: [String: [String: MailboxRole]] = mailboxIndex.mapValues { $0.mapValues(\.role) }
         let conversations = Threader.thread(messages, myAddresses: myAddresses) { message in
             let role = roles[message.accountID]?[message.mailboxPath]

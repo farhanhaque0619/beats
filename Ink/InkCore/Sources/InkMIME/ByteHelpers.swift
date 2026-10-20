@@ -164,6 +164,27 @@ extension String {
         return replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
     }
 
+    /// Whether the ASCII `needle` occurs in the string's UTF-8 bytes.
+    ///
+    /// Byte-level on purpose: `String.contains(String)` compares `Character`s on Apple platforms,
+    /// where a combining mark after the match or a prepended character before it hides the match,
+    /// but code units on Linux, so the two platforms would disagree.
+    func containsASCII(_ needle: String) -> Bool {
+        let n = Array(needle.utf8)
+        return Array(utf8).firstRange(of: n, from: 0, to: utf8.count) != nil
+    }
+
+    /// `containsASCII` ignoring ASCII case.
+    func containsASCIICaseInsensitive(_ needle: String) -> Bool {
+        let n = Array(needle.asciiLowercased.utf8)
+        return Array(utf8).firstRangeCaseInsensitive(of: n, from: 0, to: utf8.count) != nil
+    }
+
+    /// Whether the string's UTF-8 bytes start with the ASCII `prefix` (case-sensitive).
+    func hasASCIIPrefix(_ prefix: String) -> Bool {
+        utf8.starts(with: prefix.utf8)
+    }
+
     /// Replaces runs of whitespace (including newlines) with single spaces and trims the ends.
     var collapsingWhitespace: String {
         var out = String.UnicodeScalarView()

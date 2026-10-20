@@ -178,7 +178,9 @@ final class DemoMailServiceTests: XCTestCase {
         XCTAssertEqual(a, b)
         let laterClock = TestClock(referenceDate.addingTimeInterval(86_400 * 3))
         let later = try await inbox(DemoMailService(now: laterClock.function))
-        func stable(_ list: [MessageSummary]) -> [String] { list.map(\.subject).filter { !$0.hasPrefix("Invitation:") } }
+        // Subjects follow the calendar ("draft for Thursday", "Book club: November pick"), so the
+        // same mail is the same Message-IDs, in the same order.
+        func stable(_ list: [MessageSummary]) -> [String] { list.compactMap(\.messageID) }
         XCTAssertEqual(stable(a), stable(later), "same mail, dates move with the clock")
         XCTAssertEqual(a.count, later.count)
         XCTAssertNotEqual(a.first?.date, later.first?.date)

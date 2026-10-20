@@ -55,6 +55,14 @@ struct HighWaterMark: Codable, Sendable, Hashable {
         return mark
     }
 
+    /// The mark for a mailbox seen for the first time: past everything below its UIDNEXT, and
+    /// past every message in `messages`.
+    static func start(state: MailboxSyncState, covering messages: [MessageSummary], now: Date) -> HighWaterMark {
+        var mark = covering(messages) ?? HighWaterMark(uidValidity: state.uidValidity, uid: 0, receivedDate: now)
+        if mark.uidValidity == state.uidValidity, state.uidNext > 0 { mark.uid = max(mark.uid, state.uidNext - 1) }
+        return mark
+    }
+
     static func covering(_ messages: [MessageSummary]) -> HighWaterMark? {
         guard let newest = messages.max(by: { ($0.receivedDate, $0.uid) < ($1.receivedDate, $1.uid) }) else { return nil }
         let start = HighWaterMark(uidValidity: newest.uidValidity, uid: newest.uid, receivedDate: newest.receivedDate)
@@ -157,18 +165,52 @@ struct LocalChange {
 
     /// Copies removed from a mailbox (by mailbox key).
     var removed: [(key: String, message: MessageSummary)] = []
+    /// Server search results removed with them (the copy they describe is moving away).
+    var removedSearchResults: [MessageSummary] = []
     var flagChanges: [FlagChange] = []
     var snoozesAdded: [String] = []
     var snoozesRemoved: [(id: String, record: SnoozeRecord)] = []
 
-    var isEmpty: Bool { removed.isEmpty && flagChanges.isEmpty && snoozesAdded.isEmpty && snoozesRemoved.isEmpty }
+    var isEmpty: Bool {
+        removed.isEmpty && removedSearchResults.isEmpty && flagChanges.isEmpty && snoozesAdded.isEmpty && snoozesRemoved.isEmpty
+    }
 }
 
 /// One server call a triage action needs.
-struct ServerOperation: Sendable {
+struct ServerOperation: Codable, Sendable {
     var accountID: String
     var action: MailAction
     var messages: [MessageSummary]
+    /// Snoozed messages (as they were in the inbox) whose archived copies weren't cached when the
+    /// action was taken. The commit finds them on the server first (`MailStore.locateSnoozed`).
+    var unlocated: [MessageSummary] = []
+
+    init(accountID: String, action: MailAction, messages: [MessageSummary], unlocated: [MessageSummary] = []) {
+        self.accountID = accountID
+        self.action = action
+        self.messages = messages
+        self.unlocated = unlocated
+    }
+
+    var isEmpty: Bool { messages.isEmpty && unlocated.isEmpty }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accountID = try container.decode(String.self, forKey: .accountID)
+        action = try container.decode(MailAction.self, forKey: .action)
+        messages = (try? container.decode([MessageSummary].self, forKey: .messages)) ?? []
+        unlocated = (try? container.decode([MessageSummary].self, forKey: .unlocated)) ?? []
+    }
+}
+
+/// Triage the server hasn't confirmed yet. Kept in pending-actions.json from the moment an action
+/// is taken until its commit finishes (or it is undone), so an action the app didn't live to send
+/// (quit or killed during the undo window or mid-commit) is sent by the next launch.
+struct JournalEntry: Codable, Sendable {
+    var id: UUID
+    var operations: [ServerOperation]
+    /// "archive", "move to Trash" … for the error toast if the replay fails.
+    var verb: String
 }
 
 /// What to do once a committed action succeeded.
@@ -201,14 +243,18 @@ extension Array where Element == ServerOperation {
     /// One operation per account and action, messages in order, without duplicates.
     func coalesced() -> [ServerOperation] {
         var result: [ServerOperation] = []
-        for operation in self where !operation.messages.isEmpty {
+        for operation in self where !operation.isEmpty {
             if let index = result.firstIndex(where: { $0.accountID == operation.accountID && $0.action == operation.action }) {
                 let known = Set(result[index].messages.map(\.id))
                 result[index].messages += operation.messages.filter { !known.contains($0.id) }
+                let knownUnlocated = Set(result[index].unlocated.map(\.id))
+                result[index].unlocated += operation.unlocated.filter { !knownUnlocated.contains($0.id) }
             } else {
                 var unique = operation
                 var seen = Set<String>()
                 unique.messages = operation.messages.filter { seen.insert($0.id).inserted }
+                var seenUnlocated = Set<String>()
+                unique.unlocated = operation.unlocated.filter { seenUnlocated.insert($0.id).inserted }
                 result.append(unique)
             }
         }

@@ -52,7 +52,7 @@ public enum EmailHTMLDocument {
             var source = html
             if options.collapseQuotes {
                 let bytes = Array(html.utf8)
-                if let range = HTMLQuoteFinder.quoteRange(bytes) {
+                if let range = HTMLQuoteFinder.quoteRange(bytes, keepingInlineReplies: true) {
                     var wrapped = Array(bytes[..<range.lowerBound])
                     wrapped += Array(quoteToggleOpen.utf8)
                     wrapped += bytes[range]
@@ -68,7 +68,7 @@ public enum EmailHTMLDocument {
         } else {
             let text = plainText ?? ""
             if options.collapseQuotes {
-                let (body, quoted) = QuoteSplitter.split(text)
+                let (body, quoted) = QuoteSplitter.split(text, keepingInlineReplies: true)
                 bodyContent = "<div class=\"ink-plain\">" + PlainTextHTML.renderQuoted(body)
                 if let quoted {
                     bodyContent += quoteToggleOpen + "<div class=\"ink-plain\">" + PlainTextHTML.renderQuoted(quoted) + "</div></details>"
@@ -247,10 +247,11 @@ public enum EmailHTMLDocument {
             rest = after
             guard name.isEmpty || name == "-color" || name == "-image", after.first == ":" else { continue }
             let value = after.dropFirst().prefix(while: { $0 != ";" && $0 != "}" && $0 != "\"" })
-            if value.contains("url(") || value.contains("gradient(") { return true }
+            if String(value).containsASCII("url(") || String(value).containsASCII("gradient(") { return true }
             if name == "-image" { if !isPlainBackground(String(value)) { return true } else { continue } }
-            // Shorthand: any colour token that isn't white/transparent counts.
-            let tokens = value.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            // Shorthand: any colour token that isn't white/transparent counts. (`isWhitespace`
+            // also covers line breaks, including "\r\n", which is a single Character.)
+            let tokens = value.split(whereSeparator: { $0.isWhitespace })
             if tokens.isEmpty { continue }
             let joined = value.filter { !$0.isWhitespace }
             if isPlainBackground(joined) { continue }
@@ -265,9 +266,70 @@ public enum EmailHTMLDocument {
         return digits.isEmpty ? nil : Int(digits.prefix(6))
     }
 
-    /// Number of `<img>` elements that would load from the network (`http:`, `https:`, `//host`).
+    /// Number of images that would load from the network (`http:`, `https:`, `//host`) and that
+    /// the policy blocks while remote content is off: `<img>` elements (by `src` or `srcset`),
+    /// `<picture>` sources, video posters, SVG images, `background` attributes, and CSS `url(…)`
+    /// in style attributes and style sheets. A newsletter built only from background images still
+    /// needs a "Load images" button.
     public static func countRemoteImages(_ html: String) -> Int {
-        imageSources(html).filter { isRemote($0.src) }.count
+        let b = Array(html.utf8)
+        var scanner = HTMLScanner(b)
+        var count = 0
+        while let token = scanner.next() {
+            switch token {
+            case .rawText(let r, let element) where element == "style":
+                count += remoteCSSURLCount(String(decoding: b[r], as: UTF8.self))
+            case .tag(let tag) where !tag.isEnd:
+                var elementCounted = false
+                for attribute in scanner.attributes(of: tag) {
+                    let loadsImage: Bool
+                    switch attribute.name {
+                    case "src": loadsImage = tag.name == "img" || tag.name == "image" || tag.name == "input"
+                    case "srcset": loadsImage = tag.name == "img" || tag.name == "source"
+                    case "background", "poster": loadsImage = true
+                    case "href", "xlink:href": loadsImage = tag.name == "image" || tag.name == "feimage"
+                    case "style":
+                        count += remoteCSSURLCount(attribute.value)
+                        continue
+                    default: continue
+                    }
+                    guard loadsImage, !elementCounted else { continue }
+                    let urls = attribute.name == "srcset" ? srcsetURLs(attribute.value) : [attribute.value]
+                    if urls.contains(where: { isRemote($0.trimmedWhitespace) }) {
+                        count += 1
+                        elementCounted = true
+                    }
+                }
+            default:
+                continue
+            }
+        }
+        return count
+    }
+
+    /// The URLs of a `srcset` ("a.png 1x, b.png 2x").
+    /// Split on scalars, not Characters: "\r\n" is one Character that a "\n" comparison misses.
+    static func srcsetURLs(_ value: String) -> [String] {
+        value.unicodeScalars.split(separator: ",").compactMap { candidate in
+            candidate.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" || $0 == "\u{0C}" }).first
+                .map { String(String.UnicodeScalarView($0)) }
+        }
+    }
+
+    /// Number of `url(…)` references in CSS that point at the network.
+    static func remoteCSSURLCount(_ css: String) -> Int {
+        let b = Array(css.utf8)
+        let needle = Array("url(".utf8)
+        var count = 0
+        var from = 0
+        while let i = b.firstRangeCaseInsensitive(of: needle, from: from, to: b.count) {
+            var j = i + needle.count
+            while j < b.count && (isASCIIWhitespace(b[j]) || b[j] == ASCII.quote || b[j] == ASCII.apostrophe) { j += 1 }
+            let end = min(b.count, j + 8)
+            if isRemote(String(decoding: b[j..<end], as: UTF8.self)) { count += 1 }
+            from = j
+        }
+        return count
     }
 
     /// Number of images that look like tracking pixels: tiny (≤ 2px) or hidden images, or images
@@ -308,8 +370,9 @@ public enum EmailHTMLDocument {
             if height == nil, let h = cssPixels(style, "height:") { height = h }
             let tiny = (width.map { $0 <= 2 } ?? false) && (height.map { $0 <= 2 } ?? true)
                 || (height.map { $0 <= 1 } ?? false) && (width.map { $0 <= 2 } ?? true)
-            let hidden = style.contains("display:none") || style.contains("visibility:hidden") || style.contains("opacity:0;")
-                || style.hasSuffix("opacity:0") || style.contains("max-height:0") || style.contains("max-width:0")
+            // Byte-level: `String.contains` compares Characters on Apple platforms but not on Linux.
+            let hidden = ["display:none", "visibility:hidden", "opacity:0;", "max-height:0", "max-width:0"].contains(where: style.containsASCII)
+                || style.hasSuffix("opacity:0")
             result.append(ImageInfo(src: src, isTiny: tiny, isHidden: hidden))
         }
         return result
@@ -329,8 +392,8 @@ public enum EmailHTMLDocument {
     }
 
     static func isRemote(_ src: String) -> Bool {
-        let lower = src.lowercased()
-        return lower.hasPrefix("http://") || lower.hasPrefix("https://") || lower.hasPrefix("//")
+        let lower = src.asciiLowercased
+        return lower.hasASCIIPrefix("http://") || lower.hasASCIIPrefix("https://") || lower.hasASCIIPrefix("//")
     }
 
     static let trackerMarkers = [

@@ -70,7 +70,7 @@ public enum HTMLText {
                 case "p":
                     // Outlook writes one <p class=MsoNormal> per line with no margins.
                     if !tag.isEnd {
-                        msoParagraph = scanner.attribute("class", of: tag)?.asciiLowercased.contains("msonormal") ?? false
+                        msoParagraph = scanner.attribute("class", of: tag)?.containsASCIICaseInsensitive("msonormal") ?? false
                     }
                     out.blockBreak(msoParagraph ? 1 : 2)
                 case "img":

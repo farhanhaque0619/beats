@@ -187,6 +187,40 @@ public final class MailCache: @unchecked Sendable {
         }
     }
 
+    // MARK: Pruning
+
+    /// Deletes an account's least recently written bodies until the rest take at most `maxBytes`
+    /// on disk (they are downloaded again when opened). Runs off the calling thread; bodies with
+    /// a write still pending are kept.
+    public func pruneBodies(accountID: String, maxBytes: Int) async {
+        let folder = accountDirectory(accountID).appendingPathComponent("bodies", isDirectory: true)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async {
+                self.prune(folder, maxBytes: max(0, maxBytes))
+                continuation.resume()
+            }
+        }
+    }
+
+    private func prune(_ folder: URL, maxBytes: Int) {
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
+        guard let files = try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys) else { return }
+        let pendingPaths: Set<String> = lock.withLock { Set(pending.keys.map(\.standardizedFileURL.path)) }
+        var entries: [(url: URL, size: Int, date: Date)] = []
+        for file in files where file.pathExtension == "json" {
+            let values = try? file.resourceValues(forKeys: Set(keys))
+            entries.append((file, values?.fileSize ?? 0, values?.contentModificationDate ?? .distantPast))
+        }
+        // Newest first; ties by name so the outcome doesn't depend on the directory order.
+        entries.sort { $0.date != $1.date ? $0.date > $1.date : $0.url.lastPathComponent < $1.url.lastPathComponent }
+        var total = 0
+        for entry in entries {
+            total += entry.size
+            guard total > maxBytes, !pendingPaths.contains(entry.url.standardizedFileURL.path) else { continue }
+            try? fileManager.removeItem(at: entry.url)
+        }
+    }
+
     // MARK: Reading
 
     /// Reads an account's folder list and every cached mailbox, off the calling thread.
@@ -200,14 +234,28 @@ public final class MailCache: @unchecked Sendable {
         }
     }
 
-    /// Reads a body written by `saveBody` (synchronously; bodies are small files).
-    public func loadBody(key: String, accountID: String) -> MessageBody? {
+    /// Reads a body written by `saveBody`, synchronously. With `maxFileBytes`, a body whose file is
+    /// bigger (attachments) isn't read: use `loadBodyInBackground` for it.
+    public func loadBody(key: String, accountID: String, maxFileBytes: Int? = nil) -> MessageBody? {
         let url = bodyURL(accountID: accountID, key: key)
         if let write = lock.withLock({ pending[url] }) {
             guard let data = try? write.produce() else { return nil }
             return Self.decode(MessageBody.self, from: data)
         }
+        if let maxFileBytes {
+            guard let size = (try? fileManager.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,
+                  size.intValue <= maxFileBytes else { return nil }
+        }
         return readJSON(MessageBody.self, from: url)
+    }
+
+    /// Reads a body written by `saveBody` off the calling thread. Nil when missing or corrupt.
+    public func loadBodyInBackground(key: String, accountID: String) async -> MessageBody? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<MessageBody?, Never>) in
+            queue.async {
+                continuation.resume(returning: self.loadBody(key: key, accountID: accountID))
+            }
+        }
     }
 
     /// Reads a JSON file written by `scheduleJSON`, off the calling thread. Nil when missing or corrupt.

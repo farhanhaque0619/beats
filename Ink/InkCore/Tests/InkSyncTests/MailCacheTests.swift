@@ -162,4 +162,28 @@ final class MailCacheTests: XCTestCase {
         let reread = await cache.loadAccount("acct")
         XCTAssertEqual(reread.mailboxContents.count, 10)
     }
+
+    func testPruningKeepsTheNewestBodiesWithinTheLimit() async throws {
+        let directory = try makeTemporaryDirectory()
+        let cache = MailCache(storageDirectory: directory, debounceInterval: 0)
+        let text = String(repeating: "Lorem ipsum dolor sit amet. ", count: 40)
+        for index in 0..<6 { cache.saveBody(MessageBody(messageID: "m\(index)", plainText: text), key: "k\(index)", accountID: "acct") }
+        cache.saveBody(MessageBody(messageID: "other", plainText: text), key: "k0", accountID: "other")
+        await cache.flush()
+        // Written an hour apart, k5 most recently.
+        for index in 0..<6 {
+            try FileManager.default.setAttributes([.modificationDate: referenceDate.addingTimeInterval(Double(index) * 3_600)],
+                                                  ofItemAtPath: cache.bodyURL(accountID: "acct", key: "k\(index)").path)
+        }
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: cache.bodyURL(accountID: "acct", key: "k0").path)[.size] as? Int)
+
+        await cache.pruneBodies(accountID: "acct", maxBytes: size * 2 + size / 2)
+        let kept = (0..<6).filter { cache.loadBody(key: "k\($0)", accountID: "acct") != nil }
+        XCTAssertEqual(kept, [4, 5], "the two most recent fit")
+        XCTAssertNotNil(cache.loadBody(key: "k0", accountID: "other"), "other accounts are untouched")
+
+        await cache.pruneBodies(accountID: "acct", maxBytes: 0)
+        XCTAssertNil(cache.loadBody(key: "k5", accountID: "acct"))
+        await cache.pruneBodies(accountID: "missing", maxBytes: 0)
+    }
 }

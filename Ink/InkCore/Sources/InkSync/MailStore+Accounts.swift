@@ -9,14 +9,32 @@ extension MailStore {
     var snoozesURL: URL { environment.storageDirectory.appendingPathComponent("snoozes.json") }
     var stateURL: URL { environment.storageDirectory.appendingPathComponent("state.json") }
     var outboxURL: URL { environment.storageDirectory.appendingPathComponent("outbox.json") }
+    var journalURL: URL { environment.storageDirectory.appendingPathComponent("pending-actions.json") }
 
     func persistAccounts() { cache?.scheduleJSON(accounts, to: accountsURL) }
-    func persistSnoozes() { cache?.scheduleJSON(snoozes, to: snoozesURL) }
+    func persistSnoozes() {
+        cache?.scheduleJSON(snoozes.merging(wakingSnoozes) { current, _ in current }, to: snoozesURL)
+    }
     func persistState() {
         persisted.recentSearches = recentSearches
         cache?.scheduleJSON(persisted, to: stateURL)
     }
     func persistOutbox() { cache?.scheduleJSON(outbox, to: outboxURL) }
+
+    /// Remembers triage until the server confirms it (see `JournalEntry`).
+    func addToJournal(_ id: UUID, _ operations: [ServerOperation], verb: String) {
+        guard cache != nil, !operations.isEmpty else { return }
+        journal.removeAll { $0.id == id }
+        journal.append(JournalEntry(id: id, operations: operations, verb: verb))
+        cache?.scheduleJSON(journal, to: journalURL)
+    }
+
+    /// The action was committed (or failed, or was undone): nothing left to replay.
+    func forgetJournal(_ id: UUID) {
+        guard journal.contains(where: { $0.id == id }) else { return }
+        journal.removeAll { $0.id == id }
+        cache?.scheduleJSON(journal, to: journalURL)
+    }
 
     func persistMailbox(key: String) {
         guard let cache, let box = mailboxData[key] else { return }
@@ -50,6 +68,7 @@ extension MailStore {
         let storedSnoozes = await cache.loadJSON([String: SnoozeRecord].self, from: snoozesURL) ?? [:]
         let storedState = await cache.loadJSON(PersistedState.self, from: stateURL) ?? PersistedState()
         let storedOutbox = await cache.loadJSON([OutgoingMessage].self, from: outboxURL) ?? []
+        let storedJournal = await cache.loadJSON([JournalEntry].self, from: journalURL) ?? []
 
         var seen = Set<String>()
         let unique = storedAccounts.filter { seen.insert($0.id).inserted }
@@ -80,6 +99,12 @@ extension MailStore {
         if !addedMeanwhile.isEmpty { persistAccounts() }
 
         isLoaded = true
+        let limit = bodyCacheLimit
+        for account in accounts {
+            let id = account.id
+            track { await cache.pruneBodies(accountID: id, maxBytes: limit) }
+        }
+        replayJournal(storedJournal)
         markChanged()
         startWakeTimer()
         guard !accounts.isEmpty else { return }
@@ -88,6 +113,42 @@ extension MailStore {
         track {
             await self.refresh(scope: scopeToRefresh, onlyIfStale: false)
             self.endSync(succeeded: false, error: nil)
+        }
+    }
+
+    /// Sends triage the last run took but didn't get to the server (see `JournalEntry`). The
+    /// change is applied locally again first, in case the cache write didn't make it either, and
+    /// kept on screen while the commit runs; a failure puts things back with an error toast.
+    func replayJournal(_ entries: [JournalEntry]) {
+        for entry in entries {
+            let operations = entry.operations.filter { services[$0.accountID] != nil && !$0.isEmpty }
+            guard !operations.isEmpty, !journal.contains(where: { $0.id == entry.id }) else { continue }
+            var change = LocalChange()
+            var protection = Protection()
+            for operation in operations {
+                switch operation.action {
+                case .markRead: applyFlagEdit(FlagEdit(insert: .seen), to: operation.messages, change: &change, protection: &protection)
+                case .markUnread: applyFlagEdit(FlagEdit(remove: .seen), to: operation.messages, change: &change, protection: &protection)
+                case .flag: applyFlagEdit(FlagEdit(insert: .flagged), to: operation.messages, change: &change, protection: &protection)
+                case .unflag: applyFlagEdit(FlagEdit(remove: .flagged), to: operation.messages, change: &change, protection: &protection)
+                case .archive, .trash, .markSpam, .moveToInbox, .move, .deletePermanently:
+                    removeLocally(operation.messages, change: &change, protection: &protection)
+                }
+            }
+            if !protection.isEmpty { protections.append(protection) }
+            addToJournal(entry.id, operations, verb: entry.verb)
+            let protectionID = protection.id
+            enqueueCommit {
+                if let failure = await self.run(operations) {
+                    self.revert(change)
+                    self.protections.removeAll { $0.id == protectionID }
+                    self.markChanged()
+                    self.showError("Couldn't \(entry.verb).", failure)
+                } else {
+                    self.finishProtection(protectionID)
+                }
+                self.forgetJournal(entry.id)
+            }
         }
     }
 
@@ -222,6 +283,7 @@ extension MailStore {
         lastMailboxListFetch[id] = nil
         let snoozedHere = snoozes.filter { $0.value.accountID == id }.map(\.key)
         for key in snoozedHere { snoozes[key] = nil }
+        wakingSnoozes = wakingSnoozes.filter { $0.value.accountID != id }
         persisted.highWaterMarks[id] = nil
         for key in bodyMemory.keys where key.hasPrefix(id + "|") { bodyMemory[key] = nil }
         bodyMemoryOrder.removeAll { $0.hasPrefix(id + "|") }
@@ -229,7 +291,16 @@ extension MailStore {
         serverSearchOrder.removeAll { serverSearchResults[$0] == nil }
         if var pending = pendingAction {
             pending.operations.removeAll { $0.accountID == id }
+            pending.change.snoozesRemoved.removeAll { $0.record.accountID == id }
             pendingAction = pending
+        }
+        if journal.contains(where: { entry in entry.operations.contains { $0.accountID == id } }) {
+            journal = journal.compactMap { entry in
+                var entry = entry
+                entry.operations.removeAll { $0.accountID == id }
+                return entry.operations.isEmpty ? nil : entry
+            }
+            cache?.scheduleJSON(journal, to: journalURL)
         }
         let doomed = outbox.filter { $0.accountID == id }.map(\.id)
         for messageID in doomed {
@@ -237,6 +308,11 @@ extension MailStore {
             pendingSendTimers[messageID] = nil
             undoStack.removeAll { $0 == .send(messageID) }
             failedSendIDs.remove(messageID)
+            // Its "Sending…" toast would otherwise offer an Undo that reverts something else.
+            if toastEntry == .send(messageID) {
+                toast = nil
+                toastEntry = nil
+            }
         }
         outbox.removeAll { $0.accountID == id }
 

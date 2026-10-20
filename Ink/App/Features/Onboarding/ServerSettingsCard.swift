@@ -83,7 +83,7 @@ enum OnboardingDiscoveryStatus: Equatable {
     case notFound
 }
 
-/// "Server settings" for Other: what autodiscovery found, editable before anything is sent.
+/// "Advanced" for Other: the server settings autodiscovery found, editable before anything is sent.
 struct OnboardingServerSettingsCard: View {
     @Binding var imap: OnboardingServerFields
     @Binding var smtp: OnboardingServerFields
@@ -103,7 +103,7 @@ struct OnboardingServerSettingsCard: View {
                         .padding(.top, 2)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: InkSpace.xxs) {
-                        Text("Server settings")
+                        Text("Advanced")
                             .font(InkFont.headline)
                             .foregroundStyle(Ink.primary)
                         statusLine
@@ -143,7 +143,7 @@ struct OnboardingServerSettingsCard: View {
     @ViewBuilder private var statusLine: some View {
         switch status {
         case .idle:
-            Text("Enter your address and Ink looks them up.")
+            Text("Server settings. Enter your address and Ink looks them up.")
                 .font(.footnote)
                 .foregroundStyle(Ink.secondary)
         case .looking:

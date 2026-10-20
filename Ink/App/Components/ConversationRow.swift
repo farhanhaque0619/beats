@@ -46,6 +46,14 @@ struct ConversationRow: View, Equatable {
             && lhs.myAddresses == rhs.myAddresses && lhs.snoozedUntil == rhs.snoozedUntil
     }
 
+    /// `.increased` on a selected row in a focused Mac list (white on the accent highlight).
+    @Environment(\.backgroundProminence) private var prominence
+
+    private var onHighlight: Bool { prominence == .increased }
+    private var primaryText: Color { onHighlight ? .white : Ink.primary }
+    private var secondaryText: Color { onHighlight ? .white.opacity(0.78) : Ink.secondary }
+    private var tertiaryText: Color { onHighlight ? .white.opacity(0.6) : Ink.tertiary }
+
     var body: some View {
         let unread = conversation.isUnread
         HStack(alignment: .top, spacing: InkSpace.m) {
@@ -61,24 +69,24 @@ struct ConversationRow: View, Equatable {
                     }
                     Text(peopleLine)
                         .font(unread ? InkFont.sender : InkFont.senderRead)
-                        .foregroundStyle(Ink.primary)
+                        .foregroundStyle(primaryText)
                         .lineLimit(1)
                     if conversation.count > 1 {
                         Text("\(conversation.count)")
                             .font(.system(.caption, design: .rounded, weight: .semibold))
-                            .foregroundStyle(Ink.tertiary)
+                            .foregroundStyle(tertiaryText)
                     }
                     Spacer(minLength: InkSpace.s)
                     trailingMeta(unread: unread)
                 }
                 Text(conversation.subject)
                     .font(unread ? InkFont.subject : InkFont.subjectRead)
-                    .foregroundStyle(unread ? Ink.primary : Ink.primary.opacity(0.78))
+                    .foregroundStyle(unread ? primaryText : primaryText.opacity(0.78))
                     .lineLimit(1)
                 if style.previewLines > 0, !conversation.snippet.isEmpty {
                     Text(conversation.snippet)
                         .font(InkFont.snippet)
-                        .foregroundStyle(Ink.secondary)
+                        .foregroundStyle(secondaryText)
                         .lineLimit(style.previewLines)
                         .multilineTextAlignment(.leading)
                 }
@@ -88,7 +96,7 @@ struct ConversationRow: View, Equatable {
         .padding(.trailing, InkSpace.gutter)
         .padding(.vertical, style.compact ? InkSpace.rowVerticalCompact : InkSpace.rowVertical)
         .overlay(alignment: .topLeading) {
-            if unread {
+            if unread && !onHighlight {
                 UnreadDot()
                     .padding(.leading, 7)
                     .padding(.top, (style.compact ? InkSpace.rowVerticalCompact : InkSpace.rowVertical) + (style.showAvatar ? (style.compact ? 10 : 16) : 7))
@@ -108,7 +116,7 @@ struct ConversationRow: View, Equatable {
             if conversation.hasAttachments {
                 Image(systemName: "paperclip")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Ink.tertiary)
+                    .foregroundStyle(tertiaryText)
             }
             if conversation.isFlagged {
                 Image(systemName: "star.fill")
@@ -123,7 +131,7 @@ struct ConversationRow: View, Equatable {
             } else {
                 Text(InkDate.listTimestamp(conversation.date))
                     .font(InkFont.meta)
-                    .foregroundStyle(unread ? Ink.primary : Ink.secondary)
+                    .foregroundStyle(unread ? primaryText : secondaryText)
             }
         }
         .fixedSize()

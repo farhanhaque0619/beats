@@ -72,7 +72,10 @@ final class AppModel {
         #if os(iOS)
         BackgroundRefresh.register(store: store, settings: settings)
         #endif
-        return AppModel(store: store, settings: settings)
+        let model = AppModel(store: store, settings: settings)
+        // Tapping a new-mail notification opens that conversation.
+        Notifier.routeTaps { [weak model] conversationID in model?.open(conversationID) }
+        return model
     }
 
     static func forScreenshots(_ scene: ScreenshotScene) -> AppModel {
@@ -197,6 +200,7 @@ final class AppModel {
         case .background:
             store.stopLiveUpdates()
             Task { await store.flushPendingActions() }
+            Notifier.updateBadge(count: settings.notificationsEnabled ? store.unreadCount(for: .allInboxes) : 0)
             #if os(iOS)
             BackgroundRefresh.schedule()
             #endif

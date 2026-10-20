@@ -228,18 +228,18 @@ struct SwipeRow<Content: View>: View {
     private func dragEnded(translation: CGFloat, velocity: CGFloat) {
         isDragging = false
         lastArm = nil
-        let final = resisted(translation)
-        guard let side = SwipeRowSide(offset: final) else {
+        let released = resisted(translation)
+        guard let side = SwipeRowSide(offset: released) else {
             settle()
             return
         }
-        var chosen = armedAction(at: final)
+        var chosen = armedAction(at: released)
         let isFling = abs(velocity) > SwipeRowMetrics.flingVelocity
-        let isTowardsSide = velocity * final > 0
+        let isTowardsSide = velocity * released > 0
         if isFling, !isTowardsSide {
             // A quick flick back cancels, wherever the row was.
             chosen = nil
-        } else if chosen == nil, isFling, abs(final) > SwipeRowMetrics.flingMinimumDistance {
+        } else if chosen == nil, isFling, abs(released) > SwipeRowMetrics.flingMinimumDistance {
             let short = actionPair(on: side).short
             if short != .none { chosen = SwipeRowArm(action: short, isLong: false) }
         }

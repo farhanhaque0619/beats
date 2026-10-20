@@ -163,11 +163,11 @@ final class EmailWebCoordinator: NSObject, WKNavigationDelegate {
     }
 
     fileprivate func didMeasure(height: CGFloat) {
-        let height = ceil(height)
-        guard height.isFinite, height > 0, abs(height - reportedHeight) >= 1 else { return }
-        reportedHeight = height
+        let rounded = ceil(height)
+        guard rounded.isFinite, rounded > 0, abs(rounded - reportedHeight) >= 1 else { return }
+        reportedHeight = rounded
         withAnimation(InkMotion.smooth) {
-            parent.contentHeight = height
+            parent.contentHeight = rounded
         }
     }
 

@@ -281,6 +281,11 @@ public enum OAuthClient {
   check on refresh and a 60 s timer), Focus/Other split (`isBulk`), unified scopes merge accounts, `preview()` builds a demo store
   synchronously (no disk, no network), toasts ("Archived", "Moved to Trash", "Snoozed until Tue 8:00", "Sending…", "Sent",
   errors). Accounts persisted to `accounts.json` (no secrets).
+  - `load()` must be idempotent: a cold background launch (BGAppRefreshTask) calls it before the UI does, and the UI
+    calls it again; the second call must not duplicate state or start a second refresh loop.
+  - `refreshAllInboxes()` returns messages that arrived after a persisted per-account high-water mark (highest
+    UID / received date seen by the previous `refreshAllInboxes` call), so foreground refreshes in between don't
+    swallow the "new mail" set used for notifications. Only unread, non-bulk inbox messages.
 
 ## App (SwiftUI)
 

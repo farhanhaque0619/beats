@@ -102,7 +102,8 @@ struct ReaderMessageBody: View {
                 contentHeight: $contentHeight,
                 onMailto: { app.handleOpenURL($0) }
             )
-            .frame(height: max(contentHeight, 1))
+            // Held at 1 pt until the page has been measured, then springs open to its height.
+            .frame(height: isReady ? max(contentHeight, 1) : 1)
             .padding(.horizontal, inspection?.isDesigned == true ? InkSpace.s : InkSpace.gutter)
             .opacity(isReady ? 1 : 0)
             .accessibilityHidden(!isReady)

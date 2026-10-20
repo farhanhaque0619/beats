@@ -267,11 +267,11 @@ struct OnboardingProvider {
         pageURL: nil,
         pageButtonTitle: "",
         notes: [
-            "Ink looks up your server settings and shows them here before your password goes anywhere.",
+            "Ink looks up your server settings and shows them under Advanced before your password goes anywhere.",
             "Turn on IMAP in your provider's settings if it's off. Many providers want an app password for mail apps.",
         ],
-        authFailureHint: "Check the password and the username under Server settings. Many providers want an app password for mail apps.",
-        connectionHint: "Check the server names and ports under Server settings."
+        authFailureHint: "Check the password, and the username under Advanced. Many providers want an app password for mail apps.",
+        connectionHint: "Check the server names and ports under Advanced."
     )
 
     private static let demo = OnboardingProvider(

@@ -408,7 +408,7 @@ struct OnboardingAccountForm: View {
     private var missingSettingsFailure: OnboardingFailure {
         OnboardingFailure(
             message: "Ink doesn't have \(provider.name)'s server settings.",
-            hint: "Go back, choose Other and enter them under Server settings."
+            hint: "Go back, choose Other and enter them under Advanced."
         )
     }
 

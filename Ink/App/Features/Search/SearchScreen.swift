@@ -146,7 +146,7 @@ struct SearchScreen: View {
                 EmptyStateView(
                     systemImage: filter?.systemImage ?? "tray",
                     title: "Nothing here",
-                    message: "No \(filter?.noun ?? "matching") conversations in \(scopeTitle)."
+                    message: filter?.emptyMessage(in: scopeTitle) ?? "Nothing in \(scopeTitle)."
                 )
             } else {
                 rows(matches)
@@ -328,6 +328,13 @@ struct SearchScreen: View {
             serverState = .idle
             return
         }
+        if serverState != .idle {
+            // Results from the previous query no longer apply.
+            withAnimation(InkMotion.snappy) {
+                serverResults = []
+                serverState = .idle
+            }
+        }
         let immediate = submittedQuery == current
         if !immediate {
             try? await Task.sleep(for: .milliseconds(120))
@@ -433,12 +440,11 @@ private enum SearchQuickFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    /// For sentences: "No unread conversations".
-    var noun: String {
+    func emptyMessage(in place: String) -> String {
         switch self {
-        case .unread: return "unread"
-        case .starred: return "starred"
-        case .attachments: return "attachment"
+        case .unread: return "No unread conversations in \(place)."
+        case .starred: return "No starred conversations in \(place)."
+        case .attachments: return "No conversations with attachments in \(place)."
         }
     }
 

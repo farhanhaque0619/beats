@@ -65,6 +65,7 @@ struct RecipientField: View {
                     }
                     input
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, InkSpace.gutter)
             .padding(.vertical, ComposeMetrics.rowPadding)
@@ -376,7 +377,12 @@ private struct RecipientFlowLayout: Layout {
     var minInputWidth: CGFloat
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = Self.resolvedWidth(proposal.width)
+        let width: CGFloat
+        if let proposed = proposal.width, proposed.isFinite {
+            width = max(proposed, 0)
+        } else {
+            width = naturalWidth(of: subviews)
+        }
         let frames = arrange(width: width, subviews: subviews)
         let height = frames.reduce(CGFloat(0)) { max($0, $1.maxY) }
         return CGSize(width: width, height: height)
@@ -394,9 +400,16 @@ private struct RecipientFlowLayout: Layout {
         }
     }
 
-    private static func resolvedWidth(_ width: CGFloat?) -> CGFloat {
-        guard let width, width.isFinite else { return 600 }
-        return max(width, 0)
+    /// Everything on one line, with the text field at its minimum width.
+    private func naturalWidth(of subviews: Subviews) -> CGFloat {
+        guard !subviews.isEmpty else { return 0 }
+        let lastIndex = subviews.count - 1
+        var total: CGFloat = 0
+        for index in subviews.indices {
+            let ideal = subviews[index].sizeThatFits(.unspecified).width
+            total += index == lastIndex ? max(ideal, minInputWidth) : ideal
+        }
+        return total + spacing * CGFloat(subviews.count - 1)
     }
 
     private func arrange(width maxWidth: CGFloat, subviews: Subviews) -> [CGRect] {

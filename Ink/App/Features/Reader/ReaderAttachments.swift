@@ -28,7 +28,7 @@ struct ReaderAttachmentStrip: View {
                         fileURL: files[attachment.id],
                         isPreparing: preparingID == attachment.id,
                         actions: ReaderAttachmentChip.Actions(
-                            open: { open(attachment) },
+                            open: { openAttachment(attachment) },
                             preview: { preview(attachment) },
                             save: { save(attachment) },
                             saveToDownloads: { saveToDownloads(attachment) }
@@ -57,7 +57,7 @@ struct ReaderAttachmentStrip: View {
 
     // MARK: Actions
 
-    private func open(_ attachment: Attachment) {
+    private func openAttachment(_ attachment: Attachment) {
         Haptics.tick()
         Task {
             guard let url = await fileURL(for: attachment) else { return }
@@ -139,8 +139,8 @@ struct ReaderAttachmentStrip: View {
 
     private func attachmentData(for attachment: Attachment) async -> Data? {
         if let data = attachment.data { return data }
-        guard let body = try? await store.body(for: message) else { return nil }
-        return body.attachments.first { $0.id == attachment.id }?.data
+        guard let fetched = try? await store.body(for: message) else { return nil }
+        return fetched.attachments.first(where: { $0.id == attachment.id })?.data
     }
 
     private func showFailure(_ message: String) {

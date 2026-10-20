@@ -62,7 +62,13 @@ if [ -d build/Ink.app ]; then
   for scene in ${MAC_SCENES:-"mac-inbox"}; do
     open -n build/Ink.app --args -InkScreenshot "$scene" -ApplePersistenceIgnoreState YES
     sleep 8
-    screencapture -x "build/screenshots/$scene.png" || echo "screencapture failed for $scene"
+    osascript -e 'tell application "Ink" to activate' 2>/dev/null || true
+    sleep 1
+    if WID=$(swift scripts/window-id.swift Ink 2>/dev/null); then
+      screencapture -x -o -l "$WID" "build/screenshots/$scene.png" || echo "screencapture failed for $scene"
+    else
+      screencapture -x "build/screenshots/$scene.png" || echo "screencapture failed for $scene"
+    fi
     osascript -e 'quit app "Ink"' 2>/dev/null || pkill -x Ink || true
     sleep 2
   done

@@ -53,9 +53,9 @@ final class MailStoreFolderDiscoveryTests: XCTestCase {
         var reply = store.draft(replyingTo: try XCTUnwrap(lunch.latest), mode: .reply, body: nil)
         reply.body = "Thursday works."
         store.send(reply)
-        let sentOut = await waitFor(3) { store.outbox.isEmpty }
-        XCTAssertTrue(sentOut)
+        await store.flushPendingActions()
         await store.waitUntilIdle()
+        XCTAssertTrue(store.outbox.isEmpty)
 
         let created = await fake.folderList()
         XCTAssertTrue(created.contains { $0.role == .sent }, "the service made Sent for the copy")
@@ -70,7 +70,7 @@ final class MailStoreFolderDiscoveryTests: XCTestCase {
 
         let lunch = try XCTUnwrap(store.conversations.first { $0.subject == "Lunch on Thursday?" })
         store.archive([lunch])
-        try await Task.sleep(nanoseconds: 150_000_000)
+        await store.flushPendingActions()
         await store.waitUntilIdle()
         XCTAssertTrue(roles(store, account).contains(.archive))
         store.scope = .unified(.archive)
@@ -82,7 +82,6 @@ final class MailStoreFolderDiscoveryTests: XCTestCase {
         store.trash([deck])
         let prize = try XCTUnwrap(store.conversations.first { $0.subject == "You won" })
         store.markSpam([prize])
-        try await Task.sleep(nanoseconds: 150_000_000)
         await store.flushPendingActions()
         await store.waitUntilIdle()
         XCTAssertTrue(roles(store, account).isSuperset(of: [.archive, .trash, .junk]), "\(roles(store, account))")

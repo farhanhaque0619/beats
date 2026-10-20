@@ -20,7 +20,7 @@ enum HTMLSanitizer {
     static let droppedTags: Set<String> = [
         "html", "head", "body", "meta", "link", "base", "title", "script", "style", "iframe", "frame", "frameset", "object",
         "embed", "applet", "param", "form", "input", "button", "select", "option", "optgroup", "textarea", "isindex", "keygen",
-        "noscript", "portal", "xml", "o:p",
+        "noscript", "portal", "xml", "o:p", "plaintext",
     ]
 
     static let urlAttributes: Set<String> = [
@@ -38,6 +38,9 @@ enum HTMLSanitizer {
         var inHead = false
         var sawBody = false
         var sawContent = false
+        // Elements the email has opened and not closed, so an end tag with nothing to close
+        // (a stray `</div>`) is dropped instead of closing Ink's wrapper (or a reply's quote) early.
+        var open: [String] = []
 
         while let token = scanner.next() {
             switch token {
@@ -79,6 +82,12 @@ enum HTMLSanitizer {
                 }
                 if droppedTags.contains(name) { continue }
                 if tag.isEnd {
+                    // `</br>` is a line break and a stray `</p>` an empty paragraph to a browser;
+                    // neither can close anything outside the email.
+                    if name != "br" && name != "p" {
+                        guard let index = open.lastIndex(of: name) else { continue }
+                        open.removeSubrange(index...)
+                    }
                     out.append(contentsOf: Array("</\(name)>".utf8))
                     continue
                 }
@@ -102,10 +111,41 @@ enum HTMLSanitizer {
                 }
                 if tag.selfClosing { out.append(contentsOf: [ASCII.space, ASCII.slash]) }
                 out.append(ASCII.gt)
+                if name == "li" || name == "dd" || name == "dt" {
+                    closeImplicitly(by: name, &open)
+                }
+                if !htmlVoidElements.contains(name) { open.append(name) }
             }
         }
         return SanitizedHTML(styles: styles, body: String(decoding: out, as: UTF8.self), bodyStyle: bodyStyle)
     }
+
+    /// A new `<li>` closes the open list item even through `div`s inside it (`<dd>`/`<dt>` likewise),
+    /// as the HTML parser does, so a later `</div>` isn't taken to match one of those `div`s.
+    static func closeImplicitly(by name: String, _ open: inout [String]) {
+        let closes: Set<String> = name == "li" ? ["li"] : ["dd", "dt"]
+        var index = open.count - 1
+        while index >= 0 {
+            let element = open[index]
+            if closes.contains(element) {
+                open.removeSubrange(index...)
+                return
+            }
+            if element != "div" && element != "p" && element != "address" && specialElements.contains(element) { return }
+            index -= 1
+        }
+    }
+
+    /// The HTML parser's "special" elements (the ones that stop the implied-close walk above).
+    static let specialElements: Set<String> = [
+        "address", "applet", "area", "article", "aside", "base", "basefont", "bgsound", "blockquote", "body", "br", "button",
+        "caption", "center", "col", "colgroup", "dd", "details", "dir", "div", "dl", "dt", "embed", "fieldset", "figcaption",
+        "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr",
+        "html", "iframe", "img", "input", "keygen", "li", "link", "listing", "main", "marquee", "menu", "meta", "nav",
+        "noembed", "noframes", "noscript", "object", "ol", "p", "param", "plaintext", "pre", "script", "search", "section",
+        "select", "source", "style", "summary", "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead",
+        "title", "tr", "track", "ul", "wbr", "xmp",
+    ]
 
     static func isSafe(_ attribute: HTMLAttribute, element: String = "") -> Bool {
         let name = attribute.name

@@ -258,13 +258,31 @@ public actor SMTPClient {
 
     private func authPlain(username: String, password: String) async throws -> SMTPReply {
         let payload = SASL.plain(username: username, password: password)
-        let reply = try await command("AUTH PLAIN \(payload)", logAs: "AUTH PLAIN [redacted]")
+        let (reply, inline) = try await startAuth(mechanism: "PLAIN", initialResponse: payload)
         guard reply.code == 334 else { return reply }
         // The server ignored the initial response and asks for it now.
-        if reply.text.isEmpty {
-            return try await command(payload, logAs: "[redacted]")
+        if inline, reply.text.isEmpty {
+            let answer = try await command(payload, logAs: "[redacted]")
+            return answer.code == 334 ? try await abortSASL() : answer
         }
         return try await abortSASL()
+    }
+
+    /// The longest AUTH command line, CRLF included (RFC 5321 §4.5.3.1.4).
+    static let maxAuthLineLength = 512
+
+    /// Starts `AUTH <mechanism>`. The initial response goes on the same line only when that line
+    /// fits in 512 octets; otherwise (long OAuth tokens, RFC 4954 §4) it is sent after the
+    /// server's empty `334` challenge. Returns the reply to the last line sent and whether the
+    /// initial response went inline. Payloads never reach the log.
+    private func startAuth(mechanism: String, initialResponse: String) async throws -> (reply: SMTPReply, inline: Bool) {
+        let line = "AUTH \(mechanism) \(initialResponse)"
+        if line.utf8.count + 2 <= Self.maxAuthLineLength {
+            return (try await command(line, logAs: "AUTH \(mechanism) [redacted]"), true)
+        }
+        let challenge = try await command("AUTH \(mechanism)")
+        guard challenge.code == 334 else { return (challenge, false) }
+        return (try await command(initialResponse, logAs: "[redacted]"), false)
     }
 
     private func authLogin(username: String, password: String) async throws -> SMTPReply {
@@ -291,7 +309,7 @@ public actor SMTPClient {
             let payload = useBearer
                 ? SASL.oauthBearer(username: username, accessToken: accessToken, host: host, port: port)
                 : SASL.xoauth2(username: username, accessToken: accessToken)
-            var reply = try await command("AUTH \(name) \(payload)", logAs: "AUTH \(name) [redacted]")
+            var reply = try await startAuth(mechanism: name, initialResponse: payload).reply
             var challenge: SASL.OAuthErrorChallenge?
             if reply.code == 334 {
                 challenge = SASL.decodeOAuthErrorChallenge(reply.lines.first ?? "")

@@ -94,6 +94,22 @@ public enum IMAPFetchItem: Sendable, Hashable, CustomStringConvertible {
     }
 }
 
+/// The answers to one FETCH, and whether the server answered all of it
+/// (`IMAPClient.fetchReportingCompleteness`).
+public struct IMAPFetchOutcome: Hashable, Sendable {
+    /// One merged response per message, in the order the server sent them.
+    public var responses: [IMAPFetchResponse]
+    /// True when the command completed with OK, or with NO `[EXPUNGEISSUED]` (what's missing
+    /// was expunged). False when the server answered NO after sending only part of the data:
+    /// then a message missing from `responses` may still exist.
+    public var isComplete: Bool
+
+    public init(responses: [IMAPFetchResponse], isComplete: Bool) {
+        self.responses = responses
+        self.isComplete = isComplete
+    }
+}
+
 /// Everything one FETCH response said about a message. Attributes that weren't sent are nil.
 public struct IMAPFetchResponse: Hashable, Sendable {
     /// Message sequence number.

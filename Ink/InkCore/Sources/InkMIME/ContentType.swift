@@ -295,16 +295,25 @@ enum HeaderParameters {
         return out
     }
 
-    /// Makes an attachment name safe to show and save: no directories, control characters or
+    /// Makes an attachment name safe to show and save: no directories, control characters,
+    /// bidirectional overrides (`invoice\u{202E}fdp.exe` would read as "invoiceexe.pdf") or
     /// surrounding whitespace. Returns nil when nothing usable is left.
     static func sanitizeFilename(_ name: String) -> String? {
         var s = name
         if let sep = s.lastIndex(where: { $0 == "/" || $0 == "\\" }) {
             s = String(s[s.index(after: sep)...])
         }
-        s = String(String.UnicodeScalarView(s.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7F && !(0x80...0x9F).contains($0.value) }))
+        s = String(String.UnicodeScalarView(s.unicodeScalars.filter { scalar in
+            let v = scalar.value
+            return v >= 0x20 && v != 0x7F && !(0x80...0x9F).contains(v) && !isBidiControl(v)
+        }))
         s = s.trimmingCharacters(in: .whitespacesAndNewlines)
         if s == "." || s == ".." { return nil }
         return s.isEmpty ? nil : s
+    }
+
+    /// Bidirectional formatting characters (embeddings, overrides, isolates, marks).
+    static func isBidiControl(_ v: UInt32) -> Bool {
+        (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v) || v == 0x200E || v == 0x200F || v == 0x061C
     }
 }

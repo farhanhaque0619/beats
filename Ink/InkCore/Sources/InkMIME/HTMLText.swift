@@ -233,7 +233,7 @@ struct PlainTextWriter {
             if c == ASCII.amp, let (scalar, next) = HTMLEntities.decode(b, at: i, end: end) {
                 scratch.removeAll(keepingCapacity: true)
                 appendUTF8(scalar, to: &scratch)
-                appendScalarBytes(scratch, scalar: scalar.value, preformatted: preformatted, b: b, at: i, end: end)
+                appendScalarBytes(scratch, scalar: scalar.value, preformatted: preformatted, b: b, after: next, end: end)
                 i = next
                 continue
             }
@@ -255,7 +255,7 @@ struct PlainTextWriter {
             let len = c >= 0xF0 ? 4 : (c >= 0xE0 ? 3 : (c >= 0xC0 ? 2 : 1))
             let stop = min(i + len, end)
             let scalar = decodeScalar(b, i, stop)
-            appendScalarBytes(Array(b[i..<stop]), scalar: scalar, preformatted: preformatted, b: b, at: i, end: end)
+            appendScalarBytes(Array(b[i..<stop]), scalar: scalar, preformatted: preformatted, b: b, after: stop, end: end)
             i = stop
         }
     }
@@ -271,7 +271,8 @@ struct PlainTextWriter {
         }
     }
 
-    private mutating func appendScalarBytes(_ bytes: [UInt8], scalar: UInt32, preformatted: Bool, b: [UInt8], at: Int, end: Int) {
+    /// `after` is the index in `b` just past this character (or its entity).
+    private mutating func appendScalarBytes(_ bytes: [UInt8], scalar: UInt32, preformatted: Bool, b: [UInt8], after: Int, end: Int) {
         switch scalar {
         case 0x00A0, 0x2000...0x200A, 0x202F, 0x205F, 0x3000, 0x1680:
             // Non-breaking and typographic spaces read as plain spaces, but a block holding only
@@ -281,8 +282,9 @@ struct PlainTextWriter {
         case 0x09, 0x0A, 0x0D, 0x20:
             if preformatted { flush(); out.append(scalar == 0x0A ? ASCII.lf : ASCII.space) } else { pendingSpace = true }
         case 0x200B, 0x200C, 0x2060, 0xFEFF, 0x00AD, 0x034F, 0x180E, 0x2061...0x2064, 0x200E, 0x200F:
-            // Zero-width padding used by preheaders. ZWNJ between letters (Persian) is kept.
-            if scalar == 0x200C, let last = out.last, last != ASCII.space, last != ASCII.lf, !pendingSpace, nextIsLetter(b, at: at, end: end) {
+            // Zero-width padding used by preheaders. ZWNJ between letters (Persian) is kept; next to
+            // a no-break space or other padding it is padding too.
+            if scalar == 0x200C, !pendingSpace, pendingBreaks == 0, lastIsLetter, nextIsLetter(b, from: after, end: end) {
                 flush()
                 out.append(contentsOf: bytes)
             }
@@ -294,18 +296,25 @@ struct PlainTextWriter {
         }
     }
 
-    private func nextIsLetter(_ b: [UInt8], at: Int, end: Int) -> Bool {
-        // Skip the ZWNJ itself (3 bytes raw, or an entity), then check the next byte.
-        var i = at
-        if b[i] == ASCII.amp {
-            while i < end && b[i] != ASCII.semicolon { i += 1 }
-            i += 1
-        } else {
-            i += 3
+    /// True when the last character written is a letter.
+    private var lastIsLetter: Bool {
+        guard !out.isEmpty else { return false }
+        var start = out.count - 1
+        while start > 0 && out[start] & 0xC0 == 0x80 && out.count - start < 4 { start -= 1 }
+        return Unicode.Scalar(decodeScalar(out, start, out.count))?.properties.isAlphabetic ?? false
+    }
+
+    /// True when the character at `from` (raw UTF-8 or an entity) is a letter.
+    private func nextIsLetter(_ b: [UInt8], from: Int, end: Int) -> Bool {
+        guard from < end else { return false }
+        let c = b[from]
+        if c == ASCII.amp {
+            guard let (scalar, _) = HTMLEntities.decode(b, at: from, end: end) else { return false }
+            return scalar.properties.isAlphabetic
         }
-        guard i < end else { return false }
-        let c = b[i]
-        return c >= 0x80 || isASCIILetter(c)
+        if c < 0x80 { return isASCIILetter(c) }
+        let len = c >= 0xF0 ? 4 : (c >= 0xE0 ? 3 : (c >= 0xC0 ? 2 : 1))
+        return Unicode.Scalar(decodeScalar(b, from, min(from + len, end)))?.properties.isAlphabetic ?? false
     }
 
     mutating func finish() -> String {

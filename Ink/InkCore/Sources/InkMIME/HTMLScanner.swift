@@ -97,10 +97,12 @@ struct HTMLScanner {
         if c == ASCII.bang {
             if b.hasBytes([ASCII.lt, ASCII.bang, ASCII.dash, ASCII.dash], at: start) {
                 var end = n
-                if let close = b.firstRange(of: [ASCII.dash, ASCII.dash, ASCII.gt], from: start + 4, to: n) {
+                if b.hasBytes([ASCII.gt], at: start + 4) {
+                    end = start + 5   // "<!-->" is a whole (empty) comment to a browser
+                } else if b.hasBytes([ASCII.dash, ASCII.gt], at: start + 4) {
+                    end = start + 6   // and so is "<!--->"
+                } else if let close = b.firstRange(of: [ASCII.dash, ASCII.dash, ASCII.gt], from: start + 4, to: n) {
                     end = close + 3
-                } else if b.hasBytes([ASCII.gt], at: start + 4) {
-                    end = start + 5   // "<!-->"
                 }
                 pos = end
                 return .comment(start..<end)

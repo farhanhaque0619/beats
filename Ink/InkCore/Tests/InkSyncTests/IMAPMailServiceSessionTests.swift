@@ -460,6 +460,9 @@ final class IMAPMailServiceSessionTests: XCTestCase {
             .expect("* UID FETCH 77 (UID BODY.PEEK[])", reply: "* 3 FETCH (UID 77 BODY[] \(F.literal(raw)))\r\n" + T.ok()),
             // A summary from an older UIDVALIDITY: found again by Message-ID.
             .expect("* UID SEARCH RETURN (ALL) HEADER MESSAGE-ID \"msg-77@example.com\" UNDELETED", reply: "* ESEARCH (TAG \"{TAG}\") UID ALL 77\r\n{TAG} OK Search completed\r\n"),
+            // HEADER search matches substrings, so the hit is checked against the exact Message-ID.
+            .expect("* UID FETCH 77 (UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])", reply:
+                "* 3 FETCH (UID 77 BODY[HEADER.FIELDS (MESSAGE-ID)] \(F.literal("Message-ID: <msg-77@example.com>\r\n\r\n")))\r\n" + T.ok()),
             .expect("* UID FETCH 77 (UID BODY.PEEK[])", reply: "* 3 FETCH (UID 77 BODY[] \(F.literal(raw)))\r\n" + T.ok()),
             .expect("* UID FETCH 99 (UID BODY.PEEK[])", reply: T.ok()),
         ])
@@ -587,6 +590,8 @@ final class IMAPMailServiceSessionTests: XCTestCase {
             // The third is in Trash.
             T.dovecotSelect("Trash", exists: 3, uidNext: 9, modSeq: 4),
             .expect("* UID SEARCH RETURN (ALL) HEADER MESSAGE-ID \"c@example.com\" UNDELETED", reply: "* ESEARCH (TAG \"{TAG}\") UID ALL 8\r\n{TAG} OK Search completed\r\n"),
+            .expect("* UID FETCH 8 (UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])", reply:
+                "* 2 FETCH (UID 8 BODY[HEADER.FIELDS (MESSAGE-ID)] \(F.literal("Message-ID: <c@example.com>\r\n\r\n")))\r\n" + T.ok()),
             .expect("* UID MOVE 8 INBOX", reply: "{TAG} OK Move completed.\r\n"),
         ])
         let service = F.service(account, transports: IMAPServiceTransportQueue([script]))

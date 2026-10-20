@@ -516,22 +516,34 @@ public actor IMAPClient {
     /// FETCH (or UID FETCH) the given items. Gmail-only items are dropped on other servers, as
     /// are MODSEQ without CONDSTORE and EMAILID/THREADID/PREVIEW without their extensions;
     /// `changedSince` (CONDSTORE `CHANGEDSINCE`) is ignored without CONDSTORE, which only makes
-    /// the result larger. With `byUID`, UID is always fetched and responses for messages outside
-    /// `set` are left out: unsolicited flag updates, and the highest-UID message servers return
-    /// for `n:*` when n is above every UID (so `UID FETCH <uidNext>:*` yields only new mail).
-    /// Responses for the same message are merged.
+    /// the result larger. Responses for messages outside `set` are left out (unsolicited flag
+    /// updates for other messages). With `byUID`, UID is always fetched, and that also drops
+    /// the highest-UID message servers return for `n:*` when n is above every UID (so
+    /// `UID FETCH <uidNext>:*` yields only new mail). Responses for the same message are merged.
     ///
     /// Section data is stored under the canonical key (`IMAPFetchResponse.sectionKey`) and also
     /// under the section string exactly as passed in the item.
     public func fetch(_ set: IMAPSequenceSet, byUID: Bool, items: [IMAPFetchItem], changedSince: UInt64? = nil) async throws -> [IMAPFetchResponse] {
+        try await fetchReportingCompleteness(set, byUID: byUID, items: items, changedSince: changedSince).responses
+    }
+
+    /// Like `fetch(_:byUID:items:changedSince:)`, and also says whether the answer was complete.
+    ///
+    /// `fetch` returns what a server sent before answering NO (messages vanished mid-fetch,
+    /// one message couldn't be read), which is fine for showing mail but not for deciding what
+    /// was deleted: a message left out of a partial answer may well still be there. Use this
+    /// when absence matters. `isComplete` is true for OK, and for NO `[EXPUNGEISSUED]`, where
+    /// what's missing really was expunged.
+    public func fetchReportingCompleteness(_ set: IMAPSequenceSet, byUID: Bool, items: [IMAPFetchItem],
+                                           changedSince: UInt64? = nil) async throws -> IMAPFetchOutcome {
         try await serialized {
             try self.requireSelected()
             return try await self.performFetch(set, byUID: byUID, items: items, changedSince: changedSince)
         }
     }
 
-    private func performFetch(_ set: IMAPSequenceSet, byUID: Bool, items requested: [IMAPFetchItem], changedSince: UInt64?) async throws -> [IMAPFetchResponse] {
-        guard !set.isEmpty else { return [] }
+    private func performFetch(_ set: IMAPSequenceSet, byUID: Bool, items requested: [IMAPFetchItem], changedSince: UInt64?) async throws -> IMAPFetchOutcome {
+        guard !set.isEmpty else { return IMAPFetchOutcome(responses: [], isComplete: true) }
         var items = requested.filter(isFetchItemSupported)
         if byUID, !items.contains(.uid) { items.insert(.uid, at: 0) }
         if items.isEmpty { items = [.flags] }
@@ -555,6 +567,11 @@ public actor IMAPClient {
                 // returns for `n:*` when n is above the highest UID (RFC 3501 §6.4.8).
                 guard let uid = response.uid else { continue }
                 if !bareLast, !set.contains(uid) { continue }
+            } else if !bareLast, !set.contains(response.seq) {
+                // An unsolicited flag update for another message. Sequence numbers can't shift
+                // during a FETCH (no EXPUNGE may be sent then, RFC 3501 §7.4.1), so anything
+                // outside the set isn't an answer.
+                continue
             }
             if var existing = bySeq[response.seq] {
                 existing.merge(response)
@@ -564,6 +581,7 @@ public actor IMAPClient {
                 bySeq[response.seq] = response
             }
         }
+        var isComplete = true
         if result.tagged.status != .ok {
             // Partial results when messages vanished mid-fetch are still useful.
             let expunged: Bool
@@ -571,6 +589,7 @@ public actor IMAPClient {
             if result.tagged.status == .bad || (!expunged && order.isEmpty) {
                 try check(result, command: byUID ? "UID FETCH" : "FETCH")
             }
+            isComplete = expunged
         }
         let aliases: [(String, String)] = requested.compactMap { item in
             guard let key = item.sectionKey else { return nil }
@@ -587,13 +606,14 @@ public actor IMAPClient {
                 return nil
             }
         }
-        return order.compactMap { seq in
+        let responses: [IMAPFetchResponse] = order.compactMap { seq in
             guard var response = bySeq[seq] else { return nil }
             for (key, alias) in aliases {
                 if let data = response.sections[key], response.sections[alias] == nil { response.sections[alias] = data }
             }
             return response
         }
+        return IMAPFetchOutcome(responses: responses, isComplete: isComplete)
     }
 
     private func isFetchItemSupported(_ item: IMAPFetchItem) -> Bool {

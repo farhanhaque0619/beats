@@ -385,8 +385,19 @@ struct IMAPMailServiceConnector: Sendable {
     /// (then that one is returned and `client` is closed). The form that works is remembered for
     /// every later connection. Other providers get exactly one attempt (Yahoo locks accounts
     /// out after repeated failures; §3.7).
+    ///
+    /// A refusal comes back with provider advice (`ProviderErrorAdvice`); a failure of the
+    /// credential store (locked keychain, expired sign-in) comes back as the store reported it.
     func signIn(_ client: IMAPClient) async throws -> IMAPClient {
         let credential = try await credential()
+        do {
+            return try await signIn(client, credential: credential)
+        } catch {
+            throw adviseRefusal(error, server: .imap)
+        }
+    }
+
+    private func signIn(_ client: IMAPClient, credential: Credential) async throws -> IMAPClient {
         let configured = Self.username(account.imap, account: account)
         let first = usernames.confirmed ?? configured
         do {
@@ -437,20 +448,36 @@ struct IMAPMailServiceConnector: Sendable {
         }
     }
 
-    /// `error` as a `MailError`, with provider advice for refusals (`ProviderErrorAdvice`).
+    /// `error` as a `MailError`, with provider advice for server replies that only the person can
+    /// act on (IMAP switched off in Outlook). Sign-in refusals get their advice where the server
+    /// refused (`adviseRefusal`), so an `.authenticationFailed` from anywhere else, such as the
+    /// credential store, is passed on as it is.
     func advise(_ error: Error, server: ProviderErrorAdvice.Server) -> MailError {
+        let mapped = IMAPMailService.mailError(error)
+        if case .authenticationFailed = mapped { return mapped }
+        return adviseRefusal(mapped, server: server)
+    }
+
+    /// `error`, a server's answer to signing in, with provider advice (`ProviderErrorAdvice`).
+    func adviseRefusal(_ error: Error, server: ProviderErrorAdvice.Server) -> MailError {
         let mapped = IMAPMailService.mailError(error)
         let host = server == .imap ? account.imap.host : account.smtp.host
         return ProviderErrorAdvice.advise(mapped, provider: account.provider, host: host, authMethod: account.authMethod, server: server)
     }
 
+    /// Signs an SMTP client in; a refusal comes back with provider advice.
     func authenticate(_ client: SMTPClient) async throws {
         let username = Self.username(account.smtp, account: account)
-        switch try await credential() {
-        case .password(let password):
-            try await client.login(username: username, password: password)
-        case .oauth(let token):
-            try await client.authenticateXOAUTH2(username: username, accessToken: token.accessToken)
+        let credential = try await credential()
+        do {
+            switch credential {
+            case .password(let password):
+                try await client.login(username: username, password: password)
+            case .oauth(let token):
+                try await client.authenticateXOAUTH2(username: username, accessToken: token.accessToken)
+            }
+        } catch {
+            throw adviseRefusal(error, server: .smtp)
         }
     }
 

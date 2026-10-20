@@ -54,9 +54,9 @@ enum BodySelector {
         let html = joinHTML(collected.segments)
         var seen = Set<String>()
         var attachments: [Attachment] = []
-        let lowerHTML = html?.lowercased()
+        let referenced = html.map(referencedContentIDs) ?? []
         for part in collected.attachments where seen.insert(part.partID).inserted {
-            attachments.append(makeAttachment(part, lowerHTML: lowerHTML))
+            attachments.append(makeAttachment(part, referencedContentIDs: referenced))
         }
         return Result(plainText: plain, html: html, attachments: attachments)
     }
@@ -84,10 +84,22 @@ enum BodySelector {
 
     static func collectMixed(_ part: MIMEPart, depth: Int) -> Collected {
         var result = Collected()
-        for child in part.children {
-            result.append(collect(child, depth: depth + 1))
+        for (index, child) in part.children.enumerated() {
+            let collected = collect(child, depth: depth + 1)
+            result.append(collected)
+            // A named text file that asks to be shown inline (Apple Mail attaches .txt files with
+            // `Content-Disposition: inline`) is shown in the body and is also a file to save.
+            if index > 0, !collected.segments.isEmpty, isNamedInlineText(child) {
+                result.attachments.append(child)
+            }
         }
         return result
+    }
+
+    static func isNamedInlineText(_ part: MIMEPart) -> Bool {
+        let mimeType = part.contentType.mimeType
+        return !part.isMultipart && (mimeType == "text/plain" || mimeType == "text/html")
+            && part.filename != nil && part.disposition?.isInline == true
     }
 
     static func collectAlternative(_ part: MIMEPart, depth: Int) -> Collected {
@@ -101,6 +113,13 @@ enum BodySelector {
             if let htmlIndex { segment.html = joinHTML(results[htmlIndex].segments) }
             result.segments = [segment]
             if let chosen = htmlIndex ?? plainIndex { result.attachments += results[chosen].attachments }
+            // Files only the plain rendering carries (some mailers attach to the text branch alone);
+            // copies of the ones the HTML branch has are skipped.
+            if let htmlIndex, let plainIndex, plainIndex != htmlIndex {
+                for file in results[plainIndex].attachments where !result.attachments.contains(where: { isSameFile($0, file) }) {
+                    result.attachments.append(file)
+                }
+            }
         }
         for (index, child) in part.children.enumerated() where index != htmlIndex && index != plainIndex {
             let r = results[index]
@@ -215,10 +234,44 @@ enum BodySelector {
 
     // MARK: Attachments
 
-    static func makeAttachment(_ part: MIMEPart, lowerHTML: String?) -> Attachment {
+    static func isSameFile(_ a: MIMEPart, _ b: MIMEPart) -> Bool {
+        a.contentType.mimeType == b.contentType.mimeType && a.body.count == b.body.count && a.body == b.body
+    }
+
+    /// Every `cid:` reference in the HTML, normalised (lowercased, entities and percent-escapes
+    /// decoded). Matched whole, so `cid:image10` doesn't claim the part `image1`.
+    static func referencedContentIDs(_ html: String) -> Set<String> {
+        let b = Array(html.utf8)
+        let needle = Array("cid:".utf8)
+        var result = Set<String>()
+        var from = 0
+        while let i = b.firstRangeCaseInsensitive(of: needle, from: from, to: b.count) {
+            let start = i + needle.count
+            var end = start
+            while end < b.count {
+                let c = b[end]
+                if isASCIIWhitespace(c) || c == ASCII.quote || c == ASCII.apostrophe || c == ASCII.lt || c == ASCII.gt
+                    || c == ASCII.rparen || c == ASCII.lparen { break }
+                end += 1
+            }
+            if end > start {
+                let raw = HTMLText.decodeEntities(b, range: start..<end, inAttribute: true)
+                result.insert(normalizedContentID(raw))
+                if let unescaped = raw.removingPercentEncoding { result.insert(normalizedContentID(unescaped)) }
+            }
+            from = max(end, i + 1)
+        }
+        return result
+    }
+
+    static func normalizedContentID(_ id: String) -> String {
+        id.trimmingCharacters(in: CharacterSet(charactersIn: "<> \t\r\n")).lowercased()
+    }
+
+    static func makeAttachment(_ part: MIMEPart, referencedContentIDs: Set<String>) -> Attachment {
         var isInline = false
-        if let cid = part.contentID, let lowerHTML {
-            isInline = lowerHTML.contains("cid:" + cid.lowercased())
+        if let cid = part.contentID {
+            isInline = referencedContentIDs.contains(normalizedContentID(cid))
         }
         let mimeType = part.contentType.mimeType
         return Attachment(

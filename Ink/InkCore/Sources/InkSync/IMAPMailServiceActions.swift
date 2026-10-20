@@ -153,9 +153,12 @@ extension IMAPMailService {
                         _ = try await client.uidMove(resolved.set, to: allMail.rawPath)
                         forget(resolved)
                     } else if resolved.role == .inbox {
-                        // All Mail hidden from IMAP: removing the label still archives.
+                        // All Mail hidden from IMAP (RESEARCH §3.4): removing the label still archives.
                         try await client.gmailStoreLabels(resolved.set, labels: ["\\Inbox"], mode: .remove)
                         forget(resolved)
+                    } else {
+                        // Out of Trash or Spam there's nowhere to go without All Mail.
+                        throw MailError.notSupported("archiving from \(resolved.role.title) until “All Mail” is shown in IMAP (Gmail settings › Labels)")
                     }
                 default:
                     // In All Mail or another label, archiving means losing the Inbox label only.
@@ -317,6 +320,10 @@ extension IMAPMailService {
     /// Finds `messages` in the selected mailbox by X-GM-MSGID (Gmail) or Message-ID, returning
     /// (summary id, UID) pairs. Several messages share one SEARCH; a follow-up FETCH tells which
     /// UID belongs to which.
+    ///
+    /// `SEARCH HEADER Message-ID x` is a substring match (RFC 3501 §6.4.4), so it also finds
+    /// `<1x>`; every hit is checked against the exact Message-ID before anyone acts on it. Only
+    /// a lone X-GM-MSGID search is exact enough to trust as is.
     func locateInSelected(_ messages: [MessageSummary], isGmail: Bool, client: IMAPClient) async throws -> [(id: String, uid: UInt32)] {
         var results: [(id: String, uid: UInt32)] = []
         let searchable = messages.filter { (isGmail && $0.gmailMessageID != nil) || ($0.messageID.map { !$0.isEmpty } ?? false) }
@@ -328,7 +335,7 @@ extension IMAPMailService {
             guard !criteria.isEmpty else { continue }
             let uids = try await client.uidSearch(.and([.anyOf(criteria), .undeleted]))
             guard !uids.isEmpty else { continue }
-            if chunk.count == 1 {
+            if chunk.count == 1, isGmail, chunk[0].gmailMessageID != nil {
                 results += uids.map { (chunk[0].id, $0) }
                 continue
             }

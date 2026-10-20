@@ -12,18 +12,54 @@ public enum Snippet {
     public static func make(plain: String?, html: String?, maxLength: Int = 200) -> String {
         var fallback = ""
         if let plain, !plain.trimmedWhitespace.isEmpty {
-            let text = filtered(plain)
+            let clean = removingFillers(plain)
+            let text = filtered(clean)
             if !text.isEmpty { return truncate(text, maxLength: maxLength) }
-            fallback = plain
+            fallback = clean
         }
         // No plain text, or a plain part that is only boilerplate (common in newsletters).
         if let html, !html.isEmpty {
-            let converted = HTMLText.toPlainText(QuoteSplitter.stripQuotedHTML(html).html)
+            let converted = removingFillers(HTMLText.toPlainText(QuoteSplitter.stripQuotedHTML(html).html))
             let text = filtered(converted)
             if !text.isEmpty { return truncate(text, maxLength: maxLength) }
             if fallback.isEmpty { fallback = converted }
         }
         return truncate(stripLinkTargets(fallback).collapsingWhitespace, maxLength: maxLength)
+    }
+
+    /// Drops the invisible padding newsletters put after their preheader (U+034F, zero-width
+    /// spaces and joiners, word joiner, BOM, soft hyphen; RESEARCH §4.6) so it can't show up as
+    /// garbage in the preview. ZWNJ / ZWJ between two visible characters (Persian words, emoji
+    /// sequences) are kept. Works on scalars: U+034F is a combining mark, so it hides inside the
+    /// `Character` before it.
+    static func removingFillers(_ s: String) -> String {
+        guard s.unicodeScalars.contains(where: { isFiller($0) || isJoiner($0) }) else { return s }
+        let scalars = Array(s.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        for (i, scalar) in scalars.enumerated() {
+            if isFiller(scalar) { continue }
+            if isJoiner(scalar) {
+                guard let previous = out.last, isVisible(previous),
+                      i + 1 < scalars.count, isVisible(scalars[i + 1]) else { continue }
+            }
+            out.append(scalar)
+        }
+        return String(out)
+    }
+
+    static func isFiller(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x034F, 0x00AD, 0x180E, 0x200B, 0x2060...0x2064, 0xFEFF: return true
+        default: return false
+        }
+    }
+
+    static func isJoiner(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value == 0x200C || scalar.value == 0x200D
+    }
+
+    static func isVisible(_ scalar: Unicode.Scalar) -> Bool {
+        !isFiller(scalar) && !isJoiner(scalar) && !scalar.properties.isWhitespace && scalar.value != 0x00A0 && scalar.value >= 0x20
     }
 
     /// The sender's own words from `source`, one line, or "" when nothing survives the filters.

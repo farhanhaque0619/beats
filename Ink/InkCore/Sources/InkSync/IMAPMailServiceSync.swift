@@ -71,13 +71,21 @@ extension IMAPMailService {
 
         var existing = Set<UInt32>()
         var currentFlags: [UInt32: [String]] = [:]
+        // The mod-sequence the returned state may claim: not past changes this sync missed.
+        var syncedModSeq = modSeq
         if info.exists == 0 {
             // Empty: everything known is gone (and `n:*` would be invalid on some servers).
         } else if let modSeq, let previousModSeq = previous.highestModSeq, messageLimit == nil {
             if modSeq != previousModSeq {
-                let changed = try await client.fetch(.from(windowStart), byUID: true, items: [.uid, .flags], changedSince: previousModSeq)
-                for response in changed {
+                let changed = try await client.fetchReportingCompleteness(.from(windowStart), byUID: true, items: [.uid, .flags],
+                                                                          changedSince: previousModSeq)
+                for response in changed.responses {
                     if let uid = response.uid, uid >= windowStart, let flags = response.flags { currentFlags[uid] = flags }
+                }
+                if !changed.isComplete {
+                    // Changes the server didn't send would never be asked for again.
+                    log("The server sent only some of the flag changes in \(path); asking again next time.")
+                    syncedModSeq = previousModSeq
                 }
             }
             let found = try await client.uidSearch(.and([.uid(.from(windowStart)), .undeleted]))
@@ -85,11 +93,16 @@ extension IMAPMailService {
         } else {
             let spans = Self.uidSpans(known: previous.knownUIDs, from: windowStart, perSpan: messageLimit.map { max(1, $0 / 2) })
             var cutShort = false
+            var incomplete = false
+            var listed = Set<UInt32>()
             for span in spans {
-                let all = try await client.fetch(span, byUID: true, items: [.uid, .flags])
+                let outcome = try await client.fetchReportingCompleteness(span, byUID: true, items: [.uid, .flags])
+                let all = outcome.responses
+                if !outcome.isComplete { incomplete = true }
                 if let messageLimit, all.count >= messageLimit { cutShort = true }
                 for response in all {
                     guard let uid = response.uid, uid >= windowStart else { continue }
+                    listed.insert(uid)
                     let flags = response.flags ?? []
                     if MessageFlags(imapFlags: flags).contains(.deleted) { continue }
                     existing.insert(uid)
@@ -99,6 +112,12 @@ extension IMAPMailService {
             if cutShort {
                 log("A reply in \(path) reached the server's message limit and may be incomplete; loading the newest \(limit) instead.")
                 return try await resetSync(mailbox: mailbox, info: info, modSeq: modSeq, previous: previous, limit: limit, client: client)
+            }
+            if incomplete {
+                // The server answered NO part-way through: a known message it left out may well
+                // still be there, so only what it showed as gone (or \Deleted) counts as removed.
+                log("The server listed only part of \(path); keeping the messages it left out.")
+                existing.formUnion(known.subtracting(listed))
             }
         }
         // A message flagged \Deleted is on its way out (e.g. moved by a server without MOVE).
@@ -145,13 +164,13 @@ extension IMAPMailService {
         let knownNow = known.intersection(existing).union(fetchedNew).sorted()
         let highestSeen = (existing.max() ?? 0) &+ 1
         let uidNext = info.uidNext.map { max($0, highestSeen) } ?? max(previous.uidNext, highestSeen)
-        let state = MailboxSyncState(uidValidity: validity, uidNext: uidNext, highestModSeq: modSeq, knownUIDs: knownNow, lastSync: Date())
+        let state = MailboxSyncState(uidValidity: validity, uidNext: uidNext, highestModSeq: syncedModSeq, knownUIDs: knownNow, lastSync: Date())
 
         for uid in removed { memo.byUID[uid] = nil }
         memo.store(upserted)
         memo.exists = info.exists
         memo.uidNext = info.uidNext
-        memo.highestModSeq = modSeq
+        memo.highestModSeq = syncedModSeq
         memo.lastState = state
         memos[path] = memo
 

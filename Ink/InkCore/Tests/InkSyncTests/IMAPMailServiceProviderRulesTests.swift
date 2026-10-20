@@ -157,6 +157,30 @@ final class IMAPMailServiceProviderRulesTests: XCTestCase {
         }
     }
 
+    func testCredentialStoreFailuresAreNotDressedUpAsServerRefusals() async throws {
+        // The app's Keychain store says "Sign in again" itself; that isn't Gmail refusing a password.
+        let account = F.account(provider: .gmail, email: "ada@gmail.com", host: "imap.gmail.com", smtpHost: "smtp.gmail.com")
+        let imap = ScriptedTransport([
+            .send("* OK Gimap ready for requests from 203.0.113.5 f1mb123456789abc\r\n"),
+            .expect("* CAPABILITY", reply: "* CAPABILITY \(T.gmailPreAuthCapabilities)\r\n{TAG} OK Thats all she wrote!\r\n"),
+        ])
+        let smtp = ScriptedTransport([
+            .send("220 smtp.gmail.com ESMTP a640c23a62f3a-12345 - gsmtp\r\n"),
+            .expect("EHLO", reply: "250-smtp.gmail.com at your service\r\n250 AUTH LOGIN PLAIN XOAUTH2\r\n"),
+            .expect("QUIT", reply: "221 2.0.0 closing connection\r\n"),
+        ])
+        let queue = IMAPServiceTransportQueue([imap, smtp])
+        let service = IMAPMailService(account: account, credentials: FailingCredentialStore(), transportFactory: queue.factory,
+                                      options: F.fastOptions)
+        await assertIMAPServiceThrows(.authenticationFailed("Keychain locked.")) {
+            try await service.mailboxes()
+        }
+        let message = OutgoingMessage(accountID: account.id, from: account.address, to: [EmailAddress(address: "grace@example.com")], subject: "Hi", body: "Hello")
+        await assertIMAPServiceThrows(.authenticationFailed("Keychain locked.")) {
+            try await service.send(message)
+        }
+    }
+
     private func outlookLogin() -> [ScriptedTransport.Step] {
         [
             .send("* OK The Microsoft Exchange IMAP4 service is ready. [TQBOADIAUABSADAAMgBDAEEAMAAwADEAMQAuAG4AYQBtAHAAcgBkADAAMgAuAHAAcgBvAGQALgBvAHUAdABsAG8AbwBrAC4AYwBvAG0A]\r\n"),

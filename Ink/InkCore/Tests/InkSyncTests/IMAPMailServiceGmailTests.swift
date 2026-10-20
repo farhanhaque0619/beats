@@ -197,6 +197,26 @@ final class IMAPMailServiceGmailTests: XCTestCase {
         XCTAssertTrue(results.isEmpty)
     }
 
+    func testArchivingFromSpamWithAllMailHiddenSaysWhy() async throws {
+        // All Mail hidden from IMAP (RESEARCH §3.4): out of Spam there is nowhere to archive to.
+        let list = F.crlf("""
+        * LIST (\\HasNoChildren) "/" "INBOX"
+        * LIST (\\HasChildren \\Noselect) "/" "[Google Mail]"
+        * LIST (\\HasNoChildren \\Junk) "/" "[Google Mail]/Spam"
+
+        """)
+        let script = ScriptedTransport(T.gmailLogin() + [
+            T.listStep(list),
+            T.gmailSelect("[Google Mail]/Spam", exists: 3, uidNext: 4),
+        ])
+        let service = F.service(account, credential: token, transports: IMAPServiceTransportQueue([script]))
+        await assertIMAPServiceThrows(where: { if case .notSupported(let what) = $0 { return what.contains("All Mail") } else { return false } }) {
+            try await service.perform(.archive, on: [self.gmailSummary(3, path: "[Google Mail]/Spam", gmailID: 7, messageID: "s@p")])
+        }
+        XCTAssertFalse(script.transcript.contains("UID STORE"), script.transcript)
+        XCTAssertFalse(script.transcript.contains("UID MOVE"), script.transcript)
+    }
+
     func testGmailSendDoesNotAppendSentCopy() async throws {
         // Even when the account isn't flagged, Gmail's SMTP files the Sent copy itself.
         let account = F.account(provider: .other, email: "ada@gmail.com", host: "imap.gmail.com", smtpHost: "smtp.gmail.com",

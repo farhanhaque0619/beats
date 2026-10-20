@@ -84,6 +84,7 @@ public enum EmailHTMLDocument {
         var doc = "<!DOCTYPE html>\n<html><head>\n<meta charset=\"utf-8\">\n"
         doc += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
         doc += "<meta http-equiv=\"Content-Security-Policy\" content=\"\(contentSecurityPolicy(allowRemoteContent: options.allowRemoteContent))\">\n"
+        doc += "<meta name=\"referrer\" content=\"no-referrer\">\n"
         doc += "<meta name=\"color-scheme\" content=\"\(options.dark ? "dark" : "light")\">\n"
         doc += "<style>\n\(baseCSS(options))</style>\n"
         for style in emailStyles {
@@ -102,10 +103,11 @@ public enum EmailHTMLDocument {
     static let quoteToggleOpen = "<details class=\"ink-quote\"><summary class=\"ink-quote-toggle\" aria-label=\"Show quoted text\">•••</summary>"
 
     /// The policy placed in the document: nothing loads except inline styles, `cid:`/`data:`
-    /// images, embedded fonts and (when allowed) remote images.
+    /// images, embedded fonts and (when allowed) remote images. `base-uri` and `form-action` don't
+    /// fall back to `default-src`, so they are spelled out (RESEARCH §4.1).
     public static func contentSecurityPolicy(allowRemoteContent: Bool) -> String {
         let images = allowRemoteContent ? "cid: data: https: http:" : "cid: data:"
-        return "default-src 'none'; img-src \(images); style-src 'unsafe-inline'; font-src data:"
+        return "default-src 'none'; img-src \(images); style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'"
     }
 
     // MARK: Styles
